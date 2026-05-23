@@ -69,6 +69,14 @@ class BotConfig(BaseModel):
     flat_by_warning_ct: time = time(14, 0)          # soft warn — 04-risk-engine
     flat_by_force_ct:   time = time(15, 10)         # hard flatten — 04-risk-engine
     halt_on_journal_desync: bool = True
+    # Plan 9 T3 — VPS-ban hostname whitelist. Only consulted when env=='live';
+    # paper/dev/backtest skip the check. See bot.runtime.host_guard
+    # (Topstep article 8680268).
+    live_hostnames: list[str] = Field(default_factory=list)
+    # Plan 9 T7 — where the Journal writes. ':memory:' for dev/backtest;
+    # a Path on local disk for live (NEVER on iCloud Drive — SQLite WAL
+    # is unsafe on iCloud).
+    journal_path: str = ":memory:"
 
     @field_validator("broker")
     @classmethod
