@@ -170,3 +170,31 @@ class OrderEvent:
     avg_fill_price: float | None
     timestamp: datetime
     metadata: dict[str, object] | None = None
+
+
+# ---- Risk engine state (spec 04 §4.1) ---------------------------------------
+
+AccountSize = Literal["50K", "100K", "150K"]
+
+
+@dataclass(frozen=True)
+class AccountState:
+    """Tick-fresh account snapshot fed to TopstepRiskGate.approve_or_deny().
+
+    Populated by the driver (Nautilus RiskEngine host) from broker queries on
+    every tick. The phantom-MLL state machine in CombineIntradayDrawdown
+    updates high_water_equity / is_locked / lock_point — never the strategy.
+    See spec 04 §3.4.
+    """
+    equity: float                          # cash + unrealized; tick-fresh
+    realized_pnl_today: float              # since 17:00 CT yesterday
+    unrealized_pnl: float                  # mark-to-market on open positions
+    open_positions: dict[str, int]         # symbol → signed qty (+long, -short)
+    pending_intent_count: int              # in flight, not yet broker-acked
+    high_water_equity: float               # for trailing MLL state machine
+    is_combine: bool                       # Combine vs EFA flavor
+    timestamp: datetime                    # tz-aware UTC
+    is_locked: bool = False                # populated by phantom-MLL machine
+    lock_point: float | None = None
+    start_balance: float = 50_000.0
+    account_size: AccountSize = "50K"
