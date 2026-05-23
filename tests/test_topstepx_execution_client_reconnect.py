@@ -32,7 +32,7 @@ def _make_client(
     now: object | None = None,
     force_flatten: object | None = None,
 ) -> TopstepXExecutionClient:
-    return TopstepXExecutionClient(  # type: ignore[call-arg]
+    return TopstepXExecutionClient(
         username="u", api_key="k", account_name="acct-A",
         env="paper", client_factory=lambda: fake,
         sleep=sleep,  # type: ignore[arg-type]
