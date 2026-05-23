@@ -30,11 +30,29 @@ class _Telemetry(Protocol):
     def alert(self, kind: str, **kw: object) -> None: ...
 
 
+@runtime_checkable
+class JournalProvider(Protocol):
+    """Read-only journal view for rule 6 (consistency).
+
+    Satisfied by Plan 7's SQLite-backed journal; Plan 3 uses a no-op default
+    so existing tests don't need to inject one.
+    """
+    def best_day_pnl_so_far(self) -> float: ...
+    def net_pnl_so_far(self) -> float: ...
+
+
+class _NoopJournalProvider:
+    """Default journal — returns zero, never triggers consistency rule."""
+    def best_day_pnl_so_far(self) -> float: return 0.0
+    def net_pnl_so_far(self) -> float: return 0.0
+
+
 class TopstepRiskGate:
     """Pre-trade rule check + tick-driven state updates + force-flatten triggers."""
 
     _TICK_VALUES: ClassVar[dict[str, float]] = {"MNQ": 0.50, "NQ": 5.00}
     _DLL_AMOUNT: ClassVar[float] = 1_000.0
+    _PROFIT_TARGET_50K: ClassVar[float] = 3_000.0  # Combine $50K pass threshold
 
     def __init__(
         self,
@@ -44,6 +62,7 @@ class TopstepRiskGate:
         execution_client: ExecutionClient,
         telemetry: _Telemetry,
         config: RiskConfig,
+        journal_provider: JournalProvider | None = None,
     ) -> None:
         assert config.accounts_managed == 1, (
             "Multi-account orchestration is out of scope for v1. "
@@ -61,6 +80,7 @@ class TopstepRiskGate:
         self.execution_client = execution_client
         self.telemetry = telemetry
         self.config = config
+        self.journal_provider: JournalProvider = journal_provider or _NoopJournalProvider()
         self.cancel_to_fill_tracker = RollingRatioTracker(window_minutes=60)
         self._flattening = False
 
@@ -88,7 +108,14 @@ class TopstepRiskGate:
         if decision is not None:
             return decision
 
-        # Rules 6-7 land in T11. For now, after rules 1-5 pass, approve.
+        decision = self._check_consistency(intent, state)
+        if decision is not None:
+            return decision
+
+        decision = self._check_hft_ratio(intent, state)
+        if decision is not None:
+            return decision
+
         return ApprovedOrder(
             intent=intent, state_snapshot=state, timestamp=state.timestamp,
         )
@@ -209,6 +236,51 @@ class TopstepRiskGate:
                 intent=intent,
                 reason=f"news window: |{projected}| > cap {news_cap}",
                 rule="NEWS_THROTTLE",
+                state_snapshot=state, timestamp=state.timestamp,
+            )
+        return None
+
+    def _check_consistency(
+        self, intent: OrderIntent, state: AccountState,
+    ) -> OrderDenied | None:
+        """Rule 6: Combine consistency (best-day/target <= 50%).
+
+        Default mode = soft (warn-only). Hard mode denies. EFA accounts skip
+        this rule (their analogous 40% rule applies at payout time, not per
+        trade — see EFAConsistencyDrawdown.gate_payout).
+        """
+        if not state.is_combine:
+            return None
+        best_day = self.journal_provider.best_day_pnl_so_far()
+        net_pnl = self.journal_provider.net_pnl_so_far()
+        target_remaining = self._PROFIT_TARGET_50K - net_pnl
+        if target_remaining <= 0:
+            return None
+        if (best_day / target_remaining) <= 0.50:
+            return None
+        if self.config.consistency_mode == "hard":
+            return OrderDenied(
+                intent=intent,
+                reason=f"consistency 50% breach: best_day={best_day} target_remaining={target_remaining}",
+                rule="CONSISTENCY_HARD",
+                state_snapshot=state, timestamp=state.timestamp,
+            )
+        self.telemetry.alert(
+            "CONSISTENCY_50PCT_EXCEEDED",
+            best_day=best_day, target_remaining=target_remaining,
+        )
+        return None
+
+    def _check_hft_ratio(
+        self, intent: OrderIntent, state: AccountState,
+    ) -> OrderDenied | None:
+        """Rule 7: HFT defensive cap (cancel-to-fill ratio over rolling 60 min)."""
+        ratio = self.cancel_to_fill_tracker.ratio(now=state.timestamp)
+        if ratio > self.config.hft_cancel_to_fill_threshold:
+            return OrderDenied(
+                intent=intent,
+                reason=f"cancel/fill ratio {ratio:.2f} > threshold {self.config.hft_cancel_to_fill_threshold}",
+                rule="HFT_DEFENSIVE",
                 state_snapshot=state, timestamp=state.timestamp,
             )
         return None
