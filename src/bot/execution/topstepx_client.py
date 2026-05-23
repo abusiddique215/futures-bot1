@@ -27,7 +27,17 @@ import socket
 from collections.abc import Awaitable, Callable, Iterable
 from typing import Any, Final, Literal
 
+from bot.execution.topstepx_constants import topstepx_side
+from bot.types import OrderEvent, OrderIntent
+
 log = logging.getLogger(__name__)
+
+# TopstepX wire-protocol order-type codes (spec 02 §3.3 type-mapping).
+# Hardcoded as Final so a refactor can't accidentally drop them through
+# the SDK's enum and shift values.
+ORDER_TYPE_LIMIT: Final[int] = 1
+ORDER_TYPE_MARKET: Final[int] = 2
+ORDER_TYPE_STOP: Final[int] = 4
 
 # JWT lifetime is ~24h per spec §3.3; we re-auth 2h early to absorb clock
 # skew + transient outages. 22 * 3600 = 79_200.
@@ -95,6 +105,10 @@ class TopstepXExecutionClient:
         self._suite: Any | None = None
         self._account_id: int | None = None
         self._jwt_refresh_task: asyncio.Task[None] | None = None
+        # client_order_id → cached OrderEvent (spec §3.8 idempotency).
+        self._recent: dict[str, OrderEvent] = {}
+        # client_order_id → broker_order_id (for cancel_order).
+        self._broker_ids: dict[str, int] = {}
 
     # ---- public read-only state ----------------------------------------
 
@@ -155,6 +169,90 @@ class TopstepXExecutionClient:
 
         if self._suite is not None:
             await self._suite.disconnect()
+
+    # ---- order placement ------------------------------------------------
+
+    @staticmethod
+    def _translate(
+        intent: OrderIntent,
+        *,
+        account_id: int,
+        contract_id: str,
+    ) -> dict[str, Any]:
+        """Translate a broker-agnostic OrderIntent → TopstepX SDK kwargs.
+
+        Returns the kwargs dict that the SDK's `place_order` will receive.
+        Tests assert on the dict directly — particularly that
+        `body["side"] == 0` for BUY (the SIDE_BUY=0 footgun guard).
+
+        The on-wire body that hits TopstepX itself is camelCase; the SDK
+        kwargs are snake_case (project_x_py 3.5.9 calling convention).
+        We translate to the SDK shape; the SDK serializes to wire-shape.
+
+        v1 supports MARKET only here; BRACKET handled in _translate_bracket.
+        """
+        side_int = topstepx_side(intent.side)  # SIDE_BUY=0 footgun guarded here.
+        if intent.order_type == "MARKET":
+            order_type_int = ORDER_TYPE_MARKET
+        elif intent.order_type == "LIMIT":
+            order_type_int = ORDER_TYPE_LIMIT
+        elif intent.order_type == "STOP":
+            order_type_int = ORDER_TYPE_STOP
+        else:
+            raise NotImplementedError(
+                f"_translate does not handle order_type={intent.order_type!r}; "
+                f"use _translate_bracket for BRACKET",
+            )
+        body: dict[str, Any] = {
+            "account_id": account_id,
+            "contract_id": contract_id,
+            "side": side_int,
+            "order_type": order_type_int,
+            "size": intent.quantity,
+            "custom_tag": intent.client_order_id,
+        }
+        if intent.limit_price is not None:
+            body["limit_price"] = intent.limit_price
+        if intent.stop_price is not None:
+            body["stop_price"] = intent.stop_price
+        return body
+
+    async def place_order(self, intent: OrderIntent) -> OrderEvent:
+        """Submit an OrderIntent to TopstepX. Idempotent on client_order_id.
+
+        Spec 02 §3.3 (placement) + §3.4 (side-encoding) + §3.8 (idempotency).
+
+        v1 supports MARKET here; BRACKET goes through the place_bracket
+        path (added in T6).
+        """
+        cached = self._recent.get(intent.client_order_id)
+        if cached is not None:
+            return cached
+        if self._suite is None or self._account_id is None:
+            raise RuntimeError("place_order called before connect()")
+
+        if intent.order_type == "BRACKET":
+            raise NotImplementedError(
+                "BRACKET order placement lands in T6",
+            )
+
+        body = self._translate(
+            intent,
+            account_id=self._account_id,
+            contract_id=self._suite.instrument_id,
+        )
+        response = await self._suite.orders.place_order(**body)
+        event = OrderEvent(
+            client_order_id=intent.client_order_id,
+            broker_order_id=str(response.orderId),
+            status="PENDING",
+            filled_quantity=0,
+            avg_fill_price=None,
+            timestamp=intent.timestamp,
+        )
+        self._recent[intent.client_order_id] = event
+        self._broker_ids[intent.client_order_id] = response.orderId
+        return event
 
     # ---- JWT pre-refresh ------------------------------------------------
 
