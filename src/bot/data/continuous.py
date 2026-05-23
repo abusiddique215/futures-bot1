@@ -8,6 +8,7 @@ series equals the front-month price at every seam. Volume is unscaled.
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import date
 from itertools import pairwise
@@ -16,6 +17,7 @@ from pathlib import Path
 import pyarrow.dataset as ds
 
 from bot.data.contract_calendar import parse_contract_code
+from bot.types import Bar
 
 
 @dataclass(frozen=True)
@@ -128,3 +130,47 @@ class ContinuousAdjuster:
         if table.num_rows == 0:
             return None
         return table.slice(0, 1).to_pylist()[0]["close"]  # type: ignore[no-any-return]
+
+    @staticmethod
+    def adjust_with_rolls(
+        bars_by_contract: dict[str, list[Bar]],
+        rolls: list[RollEvent],
+    ) -> Iterator[Bar]:
+        """Apply each roll's cumulative_scale to its old_contract bars.
+
+        rolls must be sorted oldest-first. cumulative_scale of the newest roll
+        is `c_new/c_old` of that roll alone; older rolls multiply their own
+        inverse ratio on top. The newest contract's bars are unscaled.
+
+        Yields adjusted Bars in chronological order across all contracts.
+        Volume is NEVER scaled (volume is a count, not a price).
+        """
+        contract_scale: dict[str, float] = {}
+        if rolls:
+            # Newest contract (rolls[-1].new_contract) has scale = 1.0
+            contract_scale[rolls[-1].new_contract] = 1.0
+            for r in rolls:
+                contract_scale[r.old_contract] = r.cumulative_scale
+        else:
+            for c in bars_by_contract:
+                contract_scale[c] = 1.0
+
+        all_bars: list[Bar] = []
+        for contract, bars in bars_by_contract.items():
+            scale = contract_scale.get(contract, 1.0)
+            for b in bars:
+                if scale == 1.0:
+                    all_bars.append(b)
+                else:
+                    all_bars.append(Bar(
+                        symbol=b.symbol,
+                        open=b.open * scale,
+                        high=b.high * scale,
+                        low=b.low * scale,
+                        close=b.close * scale,
+                        volume=b.volume,  # NEVER scaled
+                        timestamp=b.timestamp,
+                        interval=b.interval,
+                    ))
+        all_bars.sort(key=lambda b: b.timestamp)
+        yield from all_bars
