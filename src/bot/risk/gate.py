@@ -116,8 +116,40 @@ class TopstepRiskGate:
         if decision is not None:
             return decision
 
+        return self._augment_with_safety_buffer(intent, state)
+
+    def _augment_with_safety_buffer(
+        self, intent: OrderIntent, state: AccountState,
+    ) -> ApprovedOrder | OrderDenied:
+        """Spec 04 §3.6 — tighten the stop so the broker order sits inside
+        phantom_mll by at least config.safety_buffer_ticks.
+
+        If the intent has no bracket (reducer/close), skip — no stop to augment.
+        If the safety buffer leaves no room for any stop, deny MLL_PROXIMITY.
+        """
+        if intent.bracket is None:
+            return ApprovedOrder(
+                intent=intent, state_snapshot=state, timestamp=state.timestamp,
+            )
+        phantom = self.policy.phantom_mll(state)
+        per_tick_dollars = self._TICK_VALUES[intent.symbol] * abs(intent.quantity)
+        if per_tick_dollars <= 0:
+            return ApprovedOrder(
+                intent=intent, state_snapshot=state, timestamp=state.timestamp,
+            )
+        phantom_distance_ticks = (state.equity - phantom) / per_tick_dollars
+        floor_after_buffer = int(phantom_distance_ticks - self.config.safety_buffer_ticks)
+        if floor_after_buffer <= 0:
+            return OrderDenied(
+                intent=intent,
+                reason="STOP_INVERTED_BY_BUFFER",
+                rule="MLL_PROXIMITY",
+                state_snapshot=state, timestamp=state.timestamp,
+            )
+        safe_stop_ticks = min(intent.bracket.stop_loss_ticks, floor_after_buffer)
+        augmented = intent.with_stop(safe_stop_ticks)
         return ApprovedOrder(
-            intent=intent, state_snapshot=state, timestamp=state.timestamp,
+            intent=augmented, state_snapshot=state, timestamp=state.timestamp,
         )
 
     def _check_hard_flat(
