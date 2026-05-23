@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from bot.types import OrderEvent
+from bot.types import OrderEvent, OrderIntent
 
 if TYPE_CHECKING:
     from ib_async import IB, Contract
@@ -64,3 +64,45 @@ class IBExecutionClient:
     async def disconnect(self) -> None:
         if self._ib is not None:
             self._ib.disconnect()
+
+    async def place_order(self, intent: OrderIntent) -> OrderEvent:
+        """Submit an OrderIntent. Idempotent on intent.client_order_id.
+
+        v1 supports MARKET (this task) and BRACKET (T5). LIMIT / STOP_LIMIT
+        emitted by strategies travel through BRACKET; bare LIMIT is not
+        used by ORB (v1 strategy) so is unsupported for now.
+        """
+        cached = self._recent.get(intent.client_order_id)
+        if cached is not None:
+            return cached
+
+        if self._ib is None:
+            raise RuntimeError("place_order called before connect()")
+        contract = self._contracts.get(intent.symbol)
+        if contract is None:
+            raise RuntimeError(f"No qualified contract for symbol {intent.symbol!r}")
+
+        if intent.order_type == "MARKET":
+            event = self._place_market(intent, contract)
+        else:
+            raise NotImplementedError(
+                f"order_type={intent.order_type!r} not yet supported in IBExecutionClient"
+            )
+
+        self._recent[intent.client_order_id] = event
+        return event
+
+    def _place_market(self, intent: OrderIntent, contract: Any) -> OrderEvent:
+        from ib_async import MarketOrder
+        order = MarketOrder(action=intent.side, totalQuantity=intent.quantity)
+        order.orderRef = intent.client_order_id  # IB-side dedup key
+        assert self._ib is not None
+        trade = self._ib.placeOrder(contract, order)
+        return OrderEvent(
+            client_order_id=intent.client_order_id,
+            broker_order_id=str(trade.order.orderId),
+            status="PENDING",
+            filled_quantity=0,
+            avg_fill_price=None,
+            timestamp=intent.timestamp,
+        )
