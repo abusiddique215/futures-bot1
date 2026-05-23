@@ -44,6 +44,15 @@ ORDER_TYPE_STOP: Final[int] = 4
 # skew + transient outages. 22 * 3600 = 79_200.
 JWT_REFRESH_INTERVAL_SECONDS: Final[int] = 22 * 60 * 60
 
+# Reconnect schedule (spec 02 §3.3): exponential backoff, capped at 60s.
+# DIFFERS from IB paper: deadline is 90 seconds, NOT 5 minutes — TopstepX
+# positions are real money under a trailing MLL that ticks on unrealized
+# PnL. Every second of unhedged exposure narrows the survival margin.
+# On deadline expiry the adapter escalates to the force_flatten callback
+# with reason "LIVE_BROKER_DOWN" — there is no second broker to flatten via.
+RECONNECT_BACKOFF_SECONDS: Final[tuple[int, ...]] = (1, 2, 4, 8, 16, 32, 60)
+RECONNECT_DEADLINE_SECONDS: Final[int] = 90
+
 
 class TopstepXExecutionClient:
     """ExecutionClient backed by project-x-py against TopstepX (live rail).
@@ -64,6 +73,8 @@ class TopstepXExecutionClient:
         live_hostname_whitelist: Iterable[str] | None = None,
         hostname: Callable[[], str] | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
+        now: Callable[[], datetime] | None = None,
+        force_flatten: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         if env not in ("paper", "live"):
             raise ValueError(
@@ -100,12 +111,18 @@ class TopstepXExecutionClient:
         self._live_hostname_whitelist = whitelist
         self._hostname_fn = hostname or socket.gethostname
         self._sleep: Callable[[float], Awaitable[None]] = sleep or asyncio.sleep
+        self._now: Callable[[], datetime] = now or (lambda: datetime.now(UTC))
+        self._force_flatten = force_flatten
 
         # Connect-time state, populated by connect():
         self._client: Any | None = None
         self._suite: Any | None = None
         self._account_id: int | None = None
         self._jwt_refresh_task: asyncio.Task[None] | None = None
+        # Set True after the 90-second reconnect deadline expires. The
+        # host engine watches this flag and triggers force-flatten via
+        # the risk gate, in addition to the direct callback below.
+        self._reconnect_failed: bool = False
         # client_order_id → cached OrderEvent (spec §3.8 idempotency).
         self._recent: dict[str, OrderEvent] = {}
         # client_order_id → broker_order_id (for cancel_order).
@@ -469,3 +486,57 @@ class TopstepXExecutionClient:
                     log.warning("topstepx JWT pre-refresh failed: %s", exc)
         except asyncio.CancelledError:
             return
+
+    # ---- reconnect with 90s deadline ------------------------------------
+
+    async def reconnect(self, symbol: str = "MNQ") -> None:
+        """Re-establish the TopstepX connection with 90-second deadline.
+
+        Schedule: 1, 2, 4, 8, 16, 32, 60, 60, ... seconds (capped).
+
+        After RECONNECT_DEADLINE_SECONDS (90s) of wall-clock without
+        success the adapter:
+          - sets _reconnect_failed = True
+          - logs CRITICAL
+          - if a force_flatten callback was injected, invokes it with
+            reason "LIVE_BROKER_DOWN"
+
+        90s is stricter than IB paper's 5 minutes because TopstepX
+        positions are real money under a trailing MLL that ticks on
+        unrealized PnL. There is no second broker to flatten via.
+
+        Spec 02 §3.3 reconnect-strategy + 00 critical-item #2.
+        """
+        start = self._now()
+        attempt = 0
+        while True:
+            try:
+                await self.connect(symbol=symbol)
+                return
+            except Exception as exc:
+                attempt += 1
+                log.warning(
+                    "topstepx reconnect attempt %d failed: %s", attempt, exc,
+                )
+            elapsed = (self._now() - start).total_seconds()
+            if elapsed >= RECONNECT_DEADLINE_SECONDS:
+                self._reconnect_failed = True
+                log.critical(
+                    "topstepx reconnect deadline (%ds) exceeded after %d "
+                    "attempts — escalating to force-flatten "
+                    "(LIVE_BROKER_DOWN)",
+                    RECONNECT_DEADLINE_SECONDS,
+                    attempt,
+                )
+                if self._force_flatten is not None:
+                    try:
+                        await self._force_flatten("LIVE_BROKER_DOWN")
+                    except Exception as exc:
+                        log.error(
+                            "topstepx force_flatten callback raised: %s", exc,
+                        )
+                return
+            wait = RECONNECT_BACKOFF_SECONDS[
+                min(attempt - 1, len(RECONNECT_BACKOFF_SECONDS) - 1)
+            ]
+            await self._sleep(wait)
