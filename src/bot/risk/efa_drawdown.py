@@ -1,0 +1,76 @@
+"""EFA drawdown policies. Spec 04 §3.3 + §4.4.
+
+Both EFA Standard and EFA Consistency:
+- Floor ratchets EoD only (NOT intraday).
+- BUT: equity-touch check (`state.equity <= phantom_mll(state)`) still runs
+  every tick in TopstepRiskGate.on_tick. The DIFFERENCE between Combine and
+  EFA is when the floor itself moves (every tick vs once per day), not what
+  triggers liquidation (always real-time unrealized).
+
+Scaling tiers verified 2026-05-22 per pre-Plan-1 research:
+  profit < $1,500          -> 2 mini-equiv
+  $1,500 <= profit < $2,000 -> 3 mini-equiv
+  profit >= $2,000         -> 5 mini-equiv
+
+TopstepX-quirk: 10 micros = 1 mini for scaling purposes. We use that.
+Tier upgrade takes effect NEXT session after Trade Report posts — not enforced
+in the policy itself (the policy just reports the cap given current state);
+the driver is responsible for snapshotting AccountState at session boundary.
+"""
+from __future__ import annotations
+
+from dataclasses import replace
+
+from bot.types import AccountState
+
+
+class EFAStandardEoDDrawdown:
+    """EFA Standard: EoD-trailing floor; profit-gated scaling plan."""
+
+    def __init__(self, mll_amount: float) -> None:
+        self._mll_amount = mll_amount
+
+    def update_on_tick(self, state: AccountState) -> AccountState:
+        return state  # EFA floor ratchets EoD only
+
+    def update_on_eod(self, state: AccountState) -> AccountState:
+        new_hw = max(state.high_water_equity, state.equity)
+        return replace(state, high_water_equity=new_hw)
+
+    def phantom_mll(self, state: AccountState) -> float:
+        # EFA: floor = max(0, peak_eod) - mll, capped at 0.
+        floor = max(0.0, state.high_water_equity) - self._mll_amount
+        return min(floor, 0.0)
+
+    def is_locked(self, state: AccountState) -> bool:
+        return state.high_water_equity >= self._mll_amount
+
+    def max_position(self, symbol: str, state: AccountState) -> int:
+        # Profit-gated tiers (VERIFIED 2026-05-22). Keyed off accumulated profit.
+        profit = state.equity - state.start_balance
+        if profit < 1500:
+            cap_mini = 2
+        elif profit < 2000:
+            cap_mini = 3
+        else:
+            cap_mini = 5
+        if symbol.startswith("MNQ"):
+            return cap_mini * 10
+        if symbol.startswith("NQ"):
+            return cap_mini
+        raise ValueError(f"Unsupported symbol for Topstep: {symbol}")
+
+
+class EFAConsistencyDrawdown(EFAStandardEoDDrawdown):
+    """EFA Consistency: same per-trade rules + payout-window 40% cap."""
+
+    CONSISTENCY_THRESHOLD: float = 0.40
+
+    def gate_payout(self, best_day: float, net_profit: float) -> bool:
+        """True iff payout request is allowed (best_day / net_profit <= 40%).
+
+        Called at request_payout() time, NOT per-trade.
+        """
+        if net_profit <= 0:
+            return False
+        return (best_day / net_profit) <= self.CONSISTENCY_THRESHOLD
