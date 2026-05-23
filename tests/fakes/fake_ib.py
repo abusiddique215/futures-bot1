@@ -87,6 +87,7 @@ class FakeIB:
         self.realtime_bars: list[Any] = []
         self._next_order_id = count(5000)
         self.disconnectedEvent = _Event()
+        self.barUpdateEvent = _Event()
 
     # ---- connection -----------------------------------------------------
 
