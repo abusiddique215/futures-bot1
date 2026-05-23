@@ -18,7 +18,21 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from bot.constants import MIN_TICK
-from bot.types import OrderEvent, OrderIntent
+from bot.types import (
+    AccountState,
+    Order,
+    OrderEvent,
+    OrderIntent,
+    Position,
+)
+
+# IB orderType strings → our OrderType literal.
+_IB_ORDER_TYPE_MAP: dict[str, str] = {
+    "MKT": "MARKET",
+    "LMT": "LIMIT",
+    "STP": "STOP",
+    "STP LMT": "STOP_LIMIT",
+}
 
 if TYPE_CHECKING:
     from ib_async import IB, Contract
@@ -198,3 +212,68 @@ class IBExecutionClient:
                 continue
             events.append(await self.cancel_order(client_order_id))
         return events
+
+    # ---- snapshot queries ------------------------------------------------
+
+    async def get_positions(self) -> list[Position]:
+        """Snapshot of all open positions, converted to bot.types.Position."""
+        if self._ib is None:
+            raise RuntimeError("get_positions called before connect()")
+        now = datetime.now(UTC)
+        out: list[Position] = []
+        for ib_pos in self._ib.positions():
+            out.append(Position(
+                symbol=ib_pos.contract.symbol,
+                signed_qty=int(ib_pos.position),
+                avg_entry_price=float(ib_pos.avgCost),
+                unrealized_pnl=0.0,  # not in Position record; comes via accountSummary
+                opened_at=now,       # IB doesn't expose entry time on this record
+            ))
+        return out
+
+    async def get_open_orders(self) -> list[Order]:
+        """Snapshot of open orders, converted to bot.types.Order."""
+        if self._ib is None:
+            raise RuntimeError("get_open_orders called before connect()")
+        now = datetime.now(UTC)
+        out: list[Order] = []
+        for ib_order in self._ib.openOrders():
+            order_type = _IB_ORDER_TYPE_MAP.get(ib_order.orderType, ib_order.orderType)
+            limit_price = ib_order.lmtPrice or None
+            stop_price = ib_order.auxPrice or None
+            out.append(Order(
+                client_order_id=ib_order.orderRef,
+                broker_order_id=str(ib_order.orderId),
+                symbol="MNQ",   # v1 single-symbol; multi-symbol comes in P8
+                side=ib_order.action,
+                quantity=int(ib_order.totalQuantity),
+                order_type=order_type,
+                status="WORKING",
+                timestamp=now,
+                limit_price=limit_price,
+                stop_price=stop_price,
+            ))
+        return out
+
+    async def get_account(self) -> AccountState:
+        """Snapshot of account equity + PnL + open positions."""
+        if self._ib is None:
+            raise RuntimeError("get_account called before connect()")
+        summary = {v.tag: v.value for v in self._ib.accountSummary()}
+        equity = float(summary.get("NetLiquidation", "0") or 0)
+        realized = float(summary.get("RealizedPnL", "0") or 0)
+        unrealized = float(summary.get("UnrealizedPnL", "0") or 0)
+        positions = {
+            p.contract.symbol: int(p.position)
+            for p in self._ib.positions()
+        }
+        return AccountState(
+            equity=equity,
+            realized_pnl_today=realized,
+            unrealized_pnl=unrealized,
+            open_positions=positions,
+            pending_intent_count=len(self._recent),
+            high_water_equity=equity,  # engine updates the running high-water
+            is_combine=True,
+            timestamp=datetime.now(UTC),
+        )
