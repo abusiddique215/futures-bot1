@@ -181,27 +181,61 @@ async def snapshot_journal(journal: Any) -> JournalState:
 def _resolve_strategy(cfg: BotConfig) -> Any:
     """Build the Strategy for `cfg.strategy`.
 
-    Plan 10 ships the wiring with a PlaceholderStrategy default — the
-    LiveTradingLoop is fully exercised in tests + smoke runs without
-    requiring real ORB warmup bars. The ORB factory (ORBProfile YAML →
-    OpeningRangeBreakoutStrategy) lands in a follow-up plan; intentionally
-    out of scope here to keep T5 to a single concern (loop wiring).
+    `BotConfig.strategy` is `Literal["orb"]` in v1 — the only registered
+    strategy. When v2 adds Maróy / Williams / NR7 / VWAP, this dispatch
+    grows. For now the function unconditionally builds the ORB strategy
+    from `cfg.strategy_profile`.
     """
-    _ = cfg
-    from bot.backtest.strategy import PlaceholderStrategy
-    return PlaceholderStrategy()
+    from bot.strategy.orb import OpeningRangeBreakoutStrategy
+    from bot.strategy.profile_loader import load_orb_profile
+    profile = load_orb_profile(cfg.strategy_profile)
+    return OpeningRangeBreakoutStrategy(profile)
 
 
 def _resolve_bar_source(cfg: BotConfig, broker: Any) -> Any:
     """Build the LiveBarSource for `cfg.broker` + `cfg.data.live_source`.
 
-    For `broker=sim` (dev / smoke / backtest) the default is an EMPTY
-    SimBarSource — the LiveTradingLoop iterates zero bars and exits
-    immediately, keeping the Plan 9 `--check` smoke test green. Real
-    live sources (IBLiveBarStream, TopstepX market-data adapter) are
-    wired in their respective broker-integration plans.
+    - `broker=ib_paper` + `cfg.data.live_source="ib"` → wrap
+      `IBLiveBarStream.subscribe(symbol, "1m")` as a LiveBarSource
+    - any other combination (sim, smoke, --check) → empty `SimBarSource([])`,
+      preserving the Plan 9 `--check` smoke test
+
+    For `broker=topstepx`, TopstepX is order-only in v1 — market data still
+    comes from IB. If `cfg.data.live_source="ib"` we use the IB stream; otherwise
+    fall through to empty source (caller is expected to provide bars).
     """
-    _ = (cfg, broker)
+    # broker=sim takes precedence — keeps --check + sim runs deterministic
+    # regardless of `live_source` setting on the cfg.
+    if cfg.broker == "sim":
+        from bot.runtime.bar_source import SimBarSource
+        return SimBarSource([])
+
+    if cfg.data.live_source == "ib":
+        from bot.data.live_ib import IBLiveBarStream
+        from bot.runtime.bar_source import LiveBarSource
+
+        class _IBBarSource:
+            """Adapter: IBLiveBarStream + symbol/interval → LiveBarSource."""
+            def __init__(self, host: str, port: int, client_id: int,
+                          symbol: str, interval: str) -> None:
+                self._stream = IBLiveBarStream(host=host, port=port, client_id=client_id)
+                self._symbol = symbol
+                self._interval = interval
+
+            async def subscribe(self):  # type: ignore[no-untyped-def]
+                await self._stream.connect()
+                async for bar in self._stream.subscribe(self._symbol, self._interval):
+                    yield bar
+
+        # IB Gateway defaults: 127.0.0.1:4002 (paper) / 4001 (live)
+        port = 4002 if cfg.env != "live" else 4001
+        source: LiveBarSource = _IBBarSource(
+            host="127.0.0.1", port=port, client_id=1,
+            symbol=cfg.data.symbol_primary,
+            interval=f"{cfg.data.bar_seconds // 60}m" if cfg.data.bar_seconds >= 60 else "1m",
+        )
+        return source
+    _ = broker
     from bot.runtime.bar_source import SimBarSource
     return SimBarSource([])
 

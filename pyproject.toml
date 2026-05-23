@@ -88,6 +88,8 @@ module = ["tests.*"]
 disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = true
+warn_unused_ignores = false      # implementer-added defensive `# type: ignore`s in tests are OK
+disable_error_code = ["type-arg", "arg-type", "operator"]
 
 [tool.ruff]
 target-version = "py312"
