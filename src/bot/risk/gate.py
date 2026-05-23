@@ -9,7 +9,7 @@ Tasks 16-17 add on_tick + force_flatten.
 """
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 from bot.execution.ports import ExecutionClient
 from bot.risk.cancel_tracker import RollingRatioTracker
@@ -32,6 +32,9 @@ class _Telemetry(Protocol):
 
 class TopstepRiskGate:
     """Pre-trade rule check + tick-driven state updates + force-flatten triggers."""
+
+    _TICK_VALUES: ClassVar[dict[str, float]] = {"MNQ": 0.50, "NQ": 5.00}
+    _DLL_AMOUNT: ClassVar[float] = 1_000.0
 
     def __init__(
         self,
@@ -69,7 +72,15 @@ class TopstepRiskGate:
         if decision is not None:
             return decision
 
-        # Rules 2-7 land in subsequent tasks. For now, after rule 1 passes,
+        decision = self._check_dll(intent, state)
+        if decision is not None:
+            return decision
+
+        decision = self._check_mll(intent, state)
+        if decision is not None:
+            return decision
+
+        # Rules 4-7 land in subsequent tasks. For now, after rules 1-3 pass,
         # approve unconditionally.
         return ApprovedOrder(
             intent=intent, state_snapshot=state, timestamp=state.timestamp,
@@ -100,4 +111,52 @@ class TopstepRiskGate:
                     rule="HARD_FLAT_PREEMPT",
                     state_snapshot=state, timestamp=state.timestamp,
                 )
+        return None
+
+    def _worst_case_loss(self, intent: OrderIntent) -> float:
+        """stop_distance_ticks * tick_value * qty."""
+        if intent.bracket is None:
+            return 0.0
+        return (intent.bracket.stop_loss_ticks
+                * self._TICK_VALUES[intent.symbol]
+                * abs(intent.quantity))
+
+    def _check_dll(
+        self, intent: OrderIntent, state: AccountState,
+    ) -> OrderDenied | None:
+        """Rule 2: Daily Loss Limit + stop-required sub-check."""
+        # Sub-check 2a: open-exposure orders REQUIRE a bracket stop
+        if intent.is_market_or_limit_open() and (
+            intent.bracket is None or intent.bracket.stop_loss_ticks is None
+        ):
+            # Closes (reducing orders) don't need stops
+            if intent.is_open_increasing_exposure(state.open_positions):
+                return OrderDenied(
+                    intent=intent, reason="open-exposure order missing bracket stop",
+                    rule="STOP_REQUIRED",
+                    state_snapshot=state, timestamp=state.timestamp,
+                )
+
+        worst = self._worst_case_loss(intent)
+        projected_realized = state.realized_pnl_today - worst
+        if projected_realized <= -self._DLL_AMOUNT:
+            return OrderDenied(
+                intent=intent, reason="DLL would be breached",
+                rule="DLL",
+                state_snapshot=state, timestamp=state.timestamp,
+            )
+        return None
+
+    def _check_mll(
+        self, intent: OrderIntent, state: AccountState,
+    ) -> OrderDenied | None:
+        """Rule 3: MLL phantom check."""
+        phantom = self.policy.phantom_mll(state)
+        projected_floor = state.equity - self._worst_case_loss(intent)
+        if projected_floor < phantom:
+            return OrderDenied(
+                intent=intent, reason="MLL phantom would be breached",
+                rule="MLL",
+                state_snapshot=state, timestamp=state.timestamp,
+            )
         return None
