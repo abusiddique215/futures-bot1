@@ -124,3 +124,49 @@ class OrderIntent:
             raise ValueError("with_stop() called on intent without a bracket")
         new_bracket = replace(self.bracket, stop_loss_ticks=ticks)
         return replace(self, bracket=new_bracket)
+
+
+OrderStatus = Literal[
+    "PENDING", "WORKING", "PARTIAL_FILL", "FILLED", "CANCELED", "REJECTED",
+]
+
+
+@dataclass(frozen=True)
+class Position:
+    """Broker-reported position snapshot. See spec 02 §4 line 285."""
+    symbol: str
+    signed_qty: int              # +long, -short
+    avg_entry_price: float
+    unrealized_pnl: float
+    opened_at: datetime
+
+
+@dataclass(frozen=True)
+class Order:
+    """Broker-reported open-order snapshot. Returned by ExecutionClient.get_open_orders()."""
+    client_order_id: str
+    broker_order_id: str
+    symbol: str
+    side: Side
+    quantity: int
+    order_type: OrderType
+    status: OrderStatus
+    timestamp: datetime
+    limit_price: float | None = None
+    stop_price: float | None = None
+
+
+@dataclass(frozen=True)
+class OrderEvent:
+    """State transition emitted by ExecutionClient on every order update.
+
+    The Strategy / RiskGate consume these via the engine's event bus; metadata
+    holds broker-specific error codes (e.g. TopstepX errorCode on REJECTED).
+    """
+    client_order_id: str
+    broker_order_id: str
+    status: OrderStatus
+    filled_quantity: int
+    avg_fill_price: float | None
+    timestamp: datetime
+    metadata: dict[str, object] | None = None
