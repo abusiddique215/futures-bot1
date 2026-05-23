@@ -12,6 +12,7 @@ from bot.types import AccountState
 
 
 def _state(equity: float, hw: float | None = None) -> AccountState:
+    """hw is ABSOLUTE equity (matches AccountState semantics)."""
     return AccountState(
         equity=equity,
         realized_pnl_today=0.0,
@@ -41,12 +42,45 @@ def test_efa_update_on_eod_ratchets_high_water() -> None:
     assert s2.high_water_equity == 51_000
 
 
-def test_efa_phantom_mll_locks_at_zero_once_peak_reaches_mll() -> None:
+def test_efa_phantom_mll_at_start_is_48k() -> None:
+    """Initial phantom = start_balance - MLL = $48_000."""
     from bot.risk.efa_drawdown import EFAStandardEoDDrawdown
     p = EFAStandardEoDDrawdown(mll_amount=2_000)
-    s = _state(equity=50_000, hw=2_500)
-    # floor = max(0, hw) - mll = max(0, 2_500) - 2_000 = 500, capped at 0
-    assert p.phantom_mll(s) == pytest.approx(0.0)
+    s = _state(equity=50_000, hw=50_000)
+    assert p.phantom_mll(s) == pytest.approx(48_000.0)
+
+
+def test_efa_phantom_mll_ratchets_with_profit_hw() -> None:
+    """hw=51_000 (profit=1_000) -> floor=49_000."""
+    from bot.risk.efa_drawdown import EFAStandardEoDDrawdown
+    p = EFAStandardEoDDrawdown(mll_amount=2_000)
+    s = _state(equity=50_500, hw=51_000)
+    assert p.phantom_mll(s) == pytest.approx(49_000.0)
+
+
+def test_efa_phantom_mll_locks_at_start_balance_when_profit_hw_reaches_mll() -> None:
+    """hw=52_000 (profit=2_000) -> floor locks at start_balance = $50_000."""
+    from bot.risk.efa_drawdown import EFAStandardEoDDrawdown
+    p = EFAStandardEoDDrawdown(mll_amount=2_000)
+    s = _state(equity=51_000, hw=52_000)
+    assert p.phantom_mll(s) == pytest.approx(50_000.0)
+
+
+def test_efa_phantom_mll_stays_locked_after_further_climbing() -> None:
+    """hw=55_000 (profit=5_000) -> floor STILL at $50_000 (one-way lock)."""
+    from bot.risk.efa_drawdown import EFAStandardEoDDrawdown
+    p = EFAStandardEoDDrawdown(mll_amount=2_000)
+    s = _state(equity=53_000, hw=55_000)
+    assert p.phantom_mll(s) == pytest.approx(50_000.0)
+
+
+def test_efa_is_locked_uses_profit_semantics() -> None:
+    from bot.risk.efa_drawdown import EFAStandardEoDDrawdown
+    p = EFAStandardEoDDrawdown(mll_amount=2_000)
+    not_locked = _state(equity=51_000, hw=51_500)  # profit_hw=1_500 < 2_000
+    locked = _state(equity=51_000, hw=52_000)      # profit_hw=2_000 >= 2_000
+    assert p.is_locked(not_locked) is False
+    assert p.is_locked(locked) is True
 
 
 def test_efa_scaling_tier_below_1500_is_2_mini() -> None:

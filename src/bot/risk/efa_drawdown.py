@@ -38,12 +38,24 @@ class EFAStandardEoDDrawdown:
         return replace(state, high_water_equity=new_hw)
 
     def phantom_mll(self, state: AccountState) -> float:
-        # EFA: floor = max(0, peak_eod) - mll, capped at 0.
-        floor = max(0.0, state.high_water_equity) - self._mll_amount
-        return min(floor, 0.0)
+        """Absolute equity floor for EFA Standard.
+
+        Floor = start_balance + min(max(0, profit_hw) - MLL, 0), where
+        profit_hw = state.high_water_equity - state.start_balance.
+
+        Floor starts at start_balance - MLL and ratchets up toward start_balance
+        as profit_hw rises. Once profit_hw >= MLL, the floor LOCKS at start_balance
+        (= 0 profit). It never moves above start_balance — that's the spec's "locks
+        at 0 [profit]" rule.
+        """
+        profit_hw = state.high_water_equity - state.start_balance
+        floor_profit = max(0.0, profit_hw) - self._mll_amount
+        floor_capped = min(floor_profit, 0.0)
+        return state.start_balance + floor_capped
 
     def is_locked(self, state: AccountState) -> bool:
-        return state.high_water_equity >= self._mll_amount
+        """True once profit_hw >= MLL (the floor has reached start_balance)."""
+        return (state.high_water_equity - state.start_balance) >= self._mll_amount
 
     def max_position(self, symbol: str, state: AccountState) -> int:
         # Profit-gated tiers (VERIFIED 2026-05-22). Keyed off accumulated profit.
