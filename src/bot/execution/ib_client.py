@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from bot.constants import MIN_TICK
 from bot.types import OrderEvent, OrderIntent
 
 if TYPE_CHECKING:
@@ -84,6 +85,8 @@ class IBExecutionClient:
 
         if intent.order_type == "MARKET":
             event = self._place_market(intent, contract)
+        elif intent.order_type == "BRACKET":
+            event = self._place_bracket(intent, contract)
         else:
             raise NotImplementedError(
                 f"order_type={intent.order_type!r} not yet supported in IBExecutionClient"
@@ -101,6 +104,61 @@ class IBExecutionClient:
         return OrderEvent(
             client_order_id=intent.client_order_id,
             broker_order_id=str(trade.order.orderId),
+            status="PENDING",
+            filled_quantity=0,
+            avg_fill_price=None,
+            timestamp=intent.timestamp,
+        )
+
+    def _place_bracket(self, intent: OrderIntent, contract: Any) -> OrderEvent:
+        """Submit a 3-leg OCO bracket via ib.bracketOrder().
+
+        Translation:
+        - entry reference = intent.limit_price (required for BRACKET v1)
+        - tick offsets → points via MIN_TICK[symbol]
+        - BUY:  tp = entry + tp_ticks*tick, sl = entry - sl_ticks*tick
+        - SELL: tp = entry - tp_ticks*tick, sl = entry + sl_ticks*tick
+
+        ib.bracketOrder() returns (parent, takeProfit, stopLoss) with
+        transmit flags already set: parent=False, tp=False, stopLoss=True.
+        We place all three in order so the LAST (sl) triggers transmission.
+        """
+        if intent.bracket is None:
+            raise ValueError("BRACKET order_type requires intent.bracket to be set")
+        if intent.limit_price is None:
+            raise ValueError(
+                "BRACKET order_type requires intent.limit_price as entry reference"
+            )
+        tick = MIN_TICK[intent.symbol]
+        sl_offset = intent.bracket.stop_loss_ticks * tick
+        tp_offset = intent.bracket.take_profit_ticks * tick
+
+        if intent.side == "BUY":
+            tp_price = intent.limit_price + tp_offset
+            sl_price = intent.limit_price - sl_offset
+        else:
+            tp_price = intent.limit_price - tp_offset
+            sl_price = intent.limit_price + sl_offset
+
+        assert self._ib is not None
+        bracket = self._ib.bracketOrder(
+            intent.side, intent.quantity,
+            intent.limit_price, tp_price, sl_price,
+        )
+        parent, take_profit, stop_loss = bracket
+        parent.orderRef = intent.client_order_id
+        take_profit.orderRef = f"{intent.client_order_id}-tp"
+        stop_loss.orderRef = f"{intent.client_order_id}-sl"
+
+        # Place in order — the LAST (stop_loss) carries transmit=True so IB
+        # transmits all three legs as an OCO group.
+        parent_trade = self._ib.placeOrder(contract, parent)
+        self._ib.placeOrder(contract, take_profit)
+        self._ib.placeOrder(contract, stop_loss)
+
+        return OrderEvent(
+            client_order_id=intent.client_order_id,
+            broker_order_id=str(parent_trade.order.orderId),
             status="PENDING",
             filled_quantity=0,
             avg_fill_price=None,
