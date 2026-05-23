@@ -16,13 +16,15 @@ from bot.backtest.engine import BacktestEngine, TradeLog
 from bot.backtest.report import TradeReport
 from bot.backtest.rule_replay import RuleReplayReporter
 from bot.backtest.sim_client import SimExecutionClient
-from bot.backtest.strategy import PlaceholderStrategy
+from bot.backtest.strategy import PlaceholderStrategy, Strategy
 from bot.backtest.tracker import AccountStateTracker
 from bot.data.firstratedata import FirstRateDataLoader
 from bot.risk.combine_drawdown import CombineIntradayDrawdown
 from bot.risk.config import RiskConfig
 from bot.risk.gate import TopstepRiskGate
 from bot.risk.news import NewsCalendar
+from bot.strategy.orb import OpeningRangeBreakoutStrategy
+from bot.strategy.profile_loader import load_orb_profile
 
 
 class _NoNewsCalendar:
@@ -46,7 +48,7 @@ def _parse_date(s: str) -> datetime:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bot.backtest")
-    parser.add_argument("--strategy", choices=["placeholder"], default="placeholder")
+    parser.add_argument("--strategy", choices=["placeholder", "orb"], default="placeholder")
     parser.add_argument("--symbol", choices=["MNQ", "NQ"], default="MNQ")
     parser.add_argument("--start", required=True, type=_parse_date,
                         help="UTC start (YYYY-MM-DD)")
@@ -57,7 +59,20 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--contract", default=None,
                         help="Optional contract code (e.g. NQH24); "
                              "default uses continuous series")
+    parser.add_argument("--profile", type=Path, default=None,
+                        help="Strategy profile YAML (required when --strategy orb)")
     return parser
+
+
+def _build_strategy(args: argparse.Namespace) -> Strategy:
+    if args.strategy == "placeholder":
+        return PlaceholderStrategy()
+    if args.strategy == "orb":
+        if args.profile is None:
+            raise SystemExit("--profile is required when --strategy orb")
+        profile = load_orb_profile(args.profile)
+        return OpeningRangeBreakoutStrategy(profile)
+    raise SystemExit(f"unknown strategy: {args.strategy}")
 
 
 def _make_gate(
@@ -76,6 +91,7 @@ def _make_gate(
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
+    strategy = _build_strategy(args)
     loader = FirstRateDataLoader(raw_root=args.parquet_root, parquet_root=args.parquet_root)
     bars = loader.load(
         symbol=args.symbol,
@@ -90,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     news = _NoNewsCalendar()
     gate = _make_gate(sim, news, args.start_balance)
     engine = BacktestEngine(
-        strategy=PlaceholderStrategy(),
+        strategy=strategy,
         gate=gate, tracker=tracker, sim=sim, symbol=args.symbol,
     )
     log: TradeLog = engine.run(bars)
