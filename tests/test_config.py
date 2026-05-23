@@ -74,3 +74,60 @@ def test_bot_config_rejects_unknown_risk_policy() -> None:
     kwargs = _valid_config_kwargs() | {"risk_policy": "bogus_policy"}
     with pytest.raises(ValidationError):
         BotConfig(**kwargs)
+
+
+# ---- Cross-validators (spec 07 §3.1 lines 75-94) ----------------------------
+
+@pytest.mark.parametrize(
+    ("env", "broker", "should_pass"),
+    [
+        ("dev",   "sim",      True),
+        ("dev",   "ib_paper", True),
+        ("dev",   "topstepx", True),
+        ("paper", "sim",      False),   # paper env demands a real broker
+        ("paper", "ib_paper", True),
+        ("paper", "topstepx", True),    # TopstepX Practice sub-account OK
+        ("live",  "sim",      False),
+        ("live",  "ib_paper", False),
+        ("live",  "topstepx", True),
+    ],
+)
+def test_broker_matches_env_matrix(env: str, broker: str, should_pass: bool) -> None:
+    from bot.config import BotConfig
+    kwargs = _valid_config_kwargs() | {"env": env, "broker": broker}
+    if should_pass:
+        BotConfig(**kwargs)
+    else:
+        with pytest.raises(ValidationError, match=r"broker=.* not allowed in env="):
+            BotConfig(**kwargs)
+
+
+def test_flat_by_force_must_be_after_warning() -> None:
+    from bot.config import BotConfig
+    kwargs = _valid_config_kwargs() | {
+        "flat_by_warning_ct": time(15, 30),
+        "flat_by_force_ct":   time(15, 10),     # before warning — invalid
+    }
+    with pytest.raises(ValidationError, match="must be after"):
+        BotConfig(**kwargs)
+
+
+def test_flat_by_force_equal_to_warning_is_invalid() -> None:
+    """Equality is also a denial (the rule is strict 'after')."""
+    from bot.config import BotConfig
+    kwargs = _valid_config_kwargs() | {
+        "flat_by_warning_ct": time(15, 10),
+        "flat_by_force_ct":   time(15, 10),
+    }
+    with pytest.raises(ValidationError, match="must be after"):
+        BotConfig(**kwargs)
+
+
+def test_flat_by_force_strictly_after_is_valid() -> None:
+    from bot.config import BotConfig
+    kwargs = _valid_config_kwargs() | {
+        "flat_by_warning_ct": time(14, 0),
+        "flat_by_force_ct":   time(15, 10),
+    }
+    c = BotConfig(**kwargs)
+    assert c.flat_by_force_ct == time(15, 10)

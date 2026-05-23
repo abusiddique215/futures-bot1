@@ -12,7 +12,7 @@ from datetime import time
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 # ---- Sub-configs ------------------------------------------------------------
 
@@ -69,3 +69,28 @@ class BotConfig(BaseModel):
     flat_by_warning_ct: time = time(14, 0)          # soft warn — 04-risk-engine
     flat_by_force_ct:   time = time(15, 10)         # hard flatten — 04-risk-engine
     halt_on_journal_desync: bool = True
+
+    @field_validator("broker")
+    @classmethod
+    def broker_matches_env(cls, v: Broker, info: ValidationInfo) -> Broker:
+        """env=live demands broker=topstepx (no paper rail on a live Topstep
+        account). env=paper allows ib_paper or topstepx (TopstepX Practice).
+        See spec 07 §3.1 + 00 D14."""
+        env: Env | None = info.data.get("env")
+        allowed: dict[Env, set[Broker]] = {
+            "dev":   {"sim", "ib_paper", "topstepx"},
+            "paper": {"ib_paper", "topstepx"},
+            "live":  {"topstepx"},
+        }
+        if env is not None and v not in allowed[env]:
+            raise ValueError(f"broker={v} not allowed in env={env}")
+        return v
+
+    @field_validator("flat_by_force_ct")
+    @classmethod
+    def force_after_warning(cls, v: time, info: ValidationInfo) -> time:
+        """Hard-flat time must strictly exceed the soft-warning time."""
+        warn: time | None = info.data.get("flat_by_warning_ct")
+        if warn is not None and v <= warn:
+            raise ValueError("flat_by_force_ct must be after flat_by_warning_ct")
+        return v
