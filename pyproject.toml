@@ -50,6 +50,9 @@ strict = true
 warn_unreachable = true
 disallow_untyped_decorators = false
 plugins = ["pydantic.mypy"]
+# iCloud Drive's sync layer corrupts sqlite-backed mypy caches → sqlite3.OperationalError.
+# Park the cache on local disk so iCloud never sees it.
+cache_dir = "/tmp/mypy-topstep-bot"
 
 [[tool.mypy.overrides]]
 module = ["nautilus_trader.*", "ib_async.*", "project_x.*"]
