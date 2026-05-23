@@ -217,13 +217,65 @@ class TopstepXExecutionClient:
             body["stop_price"] = intent.stop_price
         return body
 
+    @staticmethod
+    def _translate_bracket(
+        intent: OrderIntent,
+        *,
+        account_id: int,
+        contract_id: str,
+    ) -> dict[str, Any]:
+        """Translate a BRACKET OrderIntent → TopstepX SDK kwargs (single body).
+
+        Spec 02 §3.5: unlike IB (3 separate orders + OCA group), TopstepX
+        accepts inline `stopLossBracket` / `takeProfitBracket` blocks as
+        keys on the same body as the entry. Ticks are sent directly; the
+        server converts to absolute prices.
+
+        Entry leg:
+          - intent.limit_price=None → MARKET entry (order_type=2).
+          - intent.limit_price set → LIMIT entry (order_type=1, limit_price).
+
+        Bracket children (server-side OCO):
+          - stop_loss_bracket: {ticks, type: 4 (STOP)}
+          - take_profit_bracket: {ticks, type: 1 (LIMIT)}
+        """
+        if intent.bracket is None:
+            raise ValueError(
+                "BRACKET order_type requires intent.bracket to be set",
+            )
+
+        side_int = topstepx_side(intent.side)  # SIDE_BUY=0 footgun guarded here.
+
+        if intent.limit_price is None:
+            order_type_int = ORDER_TYPE_MARKET
+        else:
+            order_type_int = ORDER_TYPE_LIMIT
+
+        body: dict[str, Any] = {
+            "account_id": account_id,
+            "contract_id": contract_id,
+            "side": side_int,
+            "order_type": order_type_int,
+            "size": intent.quantity,
+            "custom_tag": intent.client_order_id,
+            "stop_loss_bracket": {
+                "ticks": intent.bracket.stop_loss_ticks,
+                "type": ORDER_TYPE_STOP,
+            },
+            "take_profit_bracket": {
+                "ticks": intent.bracket.take_profit_ticks,
+                "type": ORDER_TYPE_LIMIT,
+            },
+        }
+        if intent.limit_price is not None:
+            body["limit_price"] = intent.limit_price
+        return body
+
     async def place_order(self, intent: OrderIntent) -> OrderEvent:
         """Submit an OrderIntent to TopstepX. Idempotent on client_order_id.
 
-        Spec 02 §3.3 (placement) + §3.4 (side-encoding) + §3.8 (idempotency).
-
-        v1 supports MARKET here; BRACKET goes through the place_bracket
-        path (added in T6).
+        Spec 02 §3.3 (placement) + §3.4 (side-encoding) + §3.5 (bracket) +
+        §3.8 (idempotency).
         """
         cached = self._recent.get(intent.client_order_id)
         if cached is not None:
@@ -232,15 +284,17 @@ class TopstepXExecutionClient:
             raise RuntimeError("place_order called before connect()")
 
         if intent.order_type == "BRACKET":
-            raise NotImplementedError(
-                "BRACKET order placement lands in T6",
+            body = self._translate_bracket(
+                intent,
+                account_id=self._account_id,
+                contract_id=self._suite.instrument_id,
             )
-
-        body = self._translate(
-            intent,
-            account_id=self._account_id,
-            contract_id=self._suite.instrument_id,
-        )
+        else:
+            body = self._translate(
+                intent,
+                account_id=self._account_id,
+                contract_id=self._suite.instrument_id,
+            )
         response = await self._suite.orders.place_order(**body)
         event = OrderEvent(
             client_order_id=intent.client_order_id,
