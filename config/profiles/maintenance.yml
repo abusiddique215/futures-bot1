@@ -1,0 +1,11 @@
+# Maintenance ORB profile — conservative: 1 MNQ, 0.8x ATR stop, 1.5R target,
+# max 1/day, no new signals after 11:30 ET.
+symbol: MNQ
+quantity: 1
+range_minutes: 5
+atr_period: 5
+atr_mult: 0.8
+tp_r_multiple: 1.5
+session_start_et: "09:30:00"
+cutoff_time_et: "11:30:00"
+max_trades_per_day: 1

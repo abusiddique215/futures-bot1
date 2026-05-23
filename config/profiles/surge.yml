@@ -1,0 +1,10 @@
+# Surge ORB profile — aggressive: 2 MNQ, 1.0x ATR stop, 2.0R target, max 2/day.
+# No per-session cutoff (all-day trading until hard-flat).
+symbol: MNQ
+quantity: 2
+range_minutes: 5
+atr_period: 5
+atr_mult: 1.0
+tp_r_multiple: 2.0
+session_start_et: "09:30:00"
+max_trades_per_day: 2
