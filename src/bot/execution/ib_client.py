@@ -50,3 +50,17 @@ class IBExecutionClient:
         self._ib: Any | None = None
         self._contracts: dict[str, Contract] = {}
         self._recent: dict[str, OrderEvent] = {}
+
+    async def connect(self) -> None:
+        """Create IB instance, connect to gateway, qualify the MNQ contract."""
+        from ib_async import Future
+        self._ib = self._ib_factory()
+        await self._ib.connectAsync(self.host, self.port, self.client_id)
+        mnq = Future(symbol="MNQ", exchange="CME")
+        qualified = await self._ib.qualifyContractsAsync(mnq)
+        # qualifyContractsAsync returns a list — take the first.
+        self._contracts["MNQ"] = qualified[0]
+
+    async def disconnect(self) -> None:
+        if self._ib is not None:
+            self._ib.disconnect()
