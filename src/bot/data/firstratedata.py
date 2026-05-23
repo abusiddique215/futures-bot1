@@ -10,15 +10,18 @@ from __future__ import annotations
 
 import csv
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pyarrow as pa
+import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
 from bot.data.contract_calendar import parse_contract_code
+from bot.types import Bar
 
 _FILENAME_RE = re.compile(r"^(?P<symbol>NQ|MNQ)_(?P<contract>\d{4}[HMUZ])_(?P<interval>1min)\.csv$")
 
@@ -205,3 +208,40 @@ class FirstRateDataLoader:
             if write_header:
                 w.writeheader()
             w.writerow(row)
+
+    def load(
+        self,
+        symbol: str,
+        contract: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Iterator[Bar]:
+        """Yield Bars in [start, end) for the given symbol+contract.
+
+        Half-open: bar timestamps are bar OPEN times (see Bar docstring), so a
+        bar at `end` belongs to the next window.
+
+        If contract is None, loads from continuous parquet (written by
+        ContinuousAdjuster, task 10). For now, contract is required.
+        """
+        if contract is None:
+            raise NotImplementedError(
+                "Continuous-series loading needs ContinuousAdjuster (task 10)"
+            )
+        root = self._parquet_root / f"symbol={symbol}" / f"contract={contract}"
+        if not root.exists():
+            return
+
+        dataset = ds.dataset(str(root), format="parquet")
+        ts_field = ds.field("timestamp")  # type: ignore[attr-defined]
+        table = dataset.to_table(
+            filter=(ts_field >= pa.scalar(start)) & (ts_field < pa.scalar(end)),
+        )
+        table = table.sort_by([("timestamp", "ascending")])
+        for row in table.to_pylist():
+            yield Bar(
+                symbol=symbol,
+                open=row["open"], high=row["high"], low=row["low"],
+                close=row["close"], volume=row["volume"],
+                timestamp=row["timestamp"], interval="1m",
+            )
