@@ -34,3 +34,7 @@ data/parquet/
 data/quarantine/
 secrets/*.age
 !secrets/.gitkeep
+
+# Pre-existing third-party reference material (Harvard algo class PDFs,
+# crypto OHLCV samples). Not part of this bot.
+tradingbot/
