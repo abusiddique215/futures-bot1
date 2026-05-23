@@ -12,7 +12,7 @@ Spec sources:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 
@@ -87,3 +87,40 @@ class OrderIntent:
     limit_price: float | None = None
     stop_price: float | None = None
     bracket: Bracket | None = None
+
+    # ---- Helper methods called by 04-risk-engine (spec 02 §4 lines 259-283) ----
+
+    def signed_qty(self) -> int:
+        """+quantity for BUY, -quantity for SELL. Used by rule 4 (max position)."""
+        return self.quantity if self.side == "BUY" else -self.quantity
+
+    def is_open_increasing_exposure(self, open_positions: dict[str, int]) -> bool:
+        """True iff applying this intent would grow |position| on this symbol.
+
+        A pure reducing/flattening order returns False. A flip (sell more than
+        long) returns True — the resulting |short| is larger than original |long|.
+        Used by rule 1 (hard-flat) — closes are always allowed after 15:00 CT.
+        """
+        current = open_positions.get(self.symbol, 0)
+        projected = current + self.signed_qty()
+        return abs(projected) > abs(current)
+
+    def is_market_or_limit_open(self) -> bool:
+        """True iff this intent opens (or modifies) exposure.
+
+        Strategies emit only MARKET / LIMIT / BRACKET intents; STOP / STOP_LIMIT
+        arrive only as bracket children submitted by the adapter. Used by
+        rule 2 sub-check (STOP_REQUIRED).
+        """
+        return self.order_type in ("MARKET", "LIMIT", "BRACKET")
+
+    def with_stop(self, ticks: int) -> OrderIntent:
+        """Return a NEW OrderIntent with bracket.stop_loss_ticks replaced.
+
+        Used by rule 3 + §3.6 stop-offset safety buffer augmentation in 04.
+        Raises ValueError if called on an intent that has no bracket.
+        """
+        if self.bracket is None:
+            raise ValueError("with_stop() called on intent without a bracket")
+        new_bracket = replace(self.bracket, stop_loss_ticks=ticks)
+        return replace(self, bracket=new_bracket)
