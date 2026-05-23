@@ -314,6 +314,36 @@ class TopstepXExecutionClient:
                 contract_id=self._suite.instrument_id,
             )
         response = await self._suite.orders.place_order(**body)
+
+        # Server rejection translation (spec 02 §3.3 server-side rule
+        # enforcement). errorCode != 0 → REJECTED, not an exception —
+        # it means our client-side TopstepRiskGate failed to predict
+        # the server's decision, which is loud-log-worthy but not fatal.
+        error_code = int(getattr(response, "errorCode", 0))
+        if error_code != 0:
+            error_message = getattr(response, "errorMessage", None)
+            log.error(
+                "topstepx rejected order %s: errorCode=%d errorMessage=%s",
+                intent.client_order_id, error_code, error_message,
+            )
+            rejected = OrderEvent(
+                client_order_id=intent.client_order_id,
+                broker_order_id=str(response.orderId),
+                status="REJECTED",
+                filled_quantity=0,
+                avg_fill_price=None,
+                timestamp=intent.timestamp,
+                metadata={
+                    "errorCode": error_code,
+                    "errorMessage": error_message,
+                },
+            )
+            # Cache the rejection too: retrying the same client_order_id
+            # without changing strategy state would just hit the same
+            # server-side rule (§3.3 spec).
+            self._recent[intent.client_order_id] = rejected
+            return rejected
+
         event = OrderEvent(
             client_order_id=intent.client_order_id,
             broker_order_id=str(response.orderId),
