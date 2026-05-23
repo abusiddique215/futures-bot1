@@ -34,17 +34,25 @@ from bot.types import (
     Bar,
     OrderDenied,
     OrderEvent,
+    OrderIntent,
 )
 
 
 @dataclass
 class TradeLog:
-    """Result of a backtest run."""
+    """Result of a backtest run.
+
+    `approved_orders` pairs each post-buffer-augmentation intent with the
+    resulting fill event in the order they happened. OrderEvent has no side
+    field, so downstream consumers (TradeReport, RuleReplayReporter) need the
+    intent to reconstruct round-trips and signed quantities.
+    """
     final_state: AccountState
     intents_emitted: int = 0
     intents_approved: int = 0
     intents_denied: list[OrderDenied] = field(default_factory=list)
     fills: list[OrderEvent] = field(default_factory=list)
+    approved_orders: list[tuple[OrderIntent, OrderEvent]] = field(default_factory=list)
 
 
 class BacktestEngine:
@@ -70,6 +78,7 @@ class BacktestEngine:
         intents_approved = 0
         intents_denied: list[OrderDenied] = []
         fills: list[OrderEvent] = []
+        approved_orders: list[tuple[OrderIntent, OrderEvent]] = []
         last_state: AccountState | None = None
         for bar in bars:
             self._tracker.mark_to_market(bar)
@@ -94,6 +103,7 @@ class BacktestEngine:
                     self._sim.register_intent(approved)
                     event = self._sim.execute_fill(approved, fill_price, bar.timestamp)
                     fills.append(event)
+                    approved_orders.append((approved, event))
                     intents_approved += 1
                 else:
                     intents_denied.append(decision)
@@ -111,4 +121,5 @@ class BacktestEngine:
             intents_approved=intents_approved,
             intents_denied=intents_denied,
             fills=fills,
+            approved_orders=approved_orders,
         )
