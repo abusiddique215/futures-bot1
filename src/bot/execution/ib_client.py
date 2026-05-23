@@ -14,6 +14,7 @@ Spec: 02-execution-clients.md §3.3 (reconnect), §3.5 (bracket-translation),
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from bot.constants import MIN_TICK
@@ -51,6 +52,10 @@ class IBExecutionClient:
         self._ib: Any | None = None
         self._contracts: dict[str, Contract] = {}
         self._recent: dict[str, OrderEvent] = {}
+        # client_order_id → (symbol, trade) — kept for cancel_order / cancel_all.
+        # For BRACKET, only the parent trade is recorded under client_order_id;
+        # canceling the parent cancels the OCO group on the IB side.
+        self._open_trades: dict[str, tuple[str, Any]] = {}
 
     async def connect(self) -> None:
         """Create IB instance, connect to gateway, qualify the MNQ contract."""
@@ -101,6 +106,7 @@ class IBExecutionClient:
         order.orderRef = intent.client_order_id  # IB-side dedup key
         assert self._ib is not None
         trade = self._ib.placeOrder(contract, order)
+        self._open_trades[intent.client_order_id] = (intent.symbol, trade)
         return OrderEvent(
             client_order_id=intent.client_order_id,
             broker_order_id=str(trade.order.orderId),
@@ -156,6 +162,7 @@ class IBExecutionClient:
         self._ib.placeOrder(contract, take_profit)
         self._ib.placeOrder(contract, stop_loss)
 
+        self._open_trades[intent.client_order_id] = (intent.symbol, parent_trade)
         return OrderEvent(
             client_order_id=intent.client_order_id,
             broker_order_id=str(parent_trade.order.orderId),
@@ -164,3 +171,30 @@ class IBExecutionClient:
             avg_fill_price=None,
             timestamp=intent.timestamp,
         )
+
+    async def cancel_order(self, client_order_id: str) -> OrderEvent:
+        """Cancel a previously-placed order. Raises KeyError if unknown."""
+        symbol_trade = self._open_trades[client_order_id]  # raises KeyError if absent
+        _symbol, trade = symbol_trade
+        assert self._ib is not None
+        self._ib.cancelOrder(trade.order)
+        # We don't have an exact cancel-ack timestamp here; use now(UTC).
+        # In a wired-up engine the broker's cancelOrderEvent fills this in.
+        event = OrderEvent(
+            client_order_id=client_order_id,
+            broker_order_id=str(trade.order.orderId),
+            status="CANCELED",
+            filled_quantity=0,
+            avg_fill_price=None,
+            timestamp=datetime.now(UTC),
+        )
+        return event
+
+    async def cancel_all(self, symbol: str) -> list[OrderEvent]:
+        """Cancel every tracked open order for `symbol`."""
+        events: list[OrderEvent] = []
+        for client_order_id, (sym, _trade) in list(self._open_trades.items()):
+            if sym != symbol:
+                continue
+            events.append(await self.cancel_order(client_order_id))
+        return events
