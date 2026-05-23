@@ -94,3 +94,20 @@ class BotConfig(BaseModel):
         if warn is not None and v <= warn:
             raise ValueError("flat_by_force_ct must be after flat_by_warning_ct")
         return v
+
+
+# ---- Loader helper ----------------------------------------------------------
+
+def load_config(path: Path) -> BotConfig:
+    """Load and validate a BotConfig from a YAML file.
+
+    The loader does NOT load secrets — those come from `.env` via a separate
+    `load_secrets()` helper added in Plan 9. See spec 07 §3.2.
+    """
+    import yaml
+
+    text = path.read_text(encoding="utf-8")
+    raw = yaml.safe_load(text)
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path}: top-level YAML must be a mapping, got {type(raw).__name__}")
+    return BotConfig.model_validate(raw)

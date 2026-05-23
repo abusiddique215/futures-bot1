@@ -1,0 +1,29 @@
+# config/bot.example.yml
+# Sample BotConfig for `env=dev, broker=sim`. Copy to config/bot.yml and edit
+# for your environment. Secrets (broker creds, telegram tokens) live in .env,
+# never in this file.
+
+env: dev
+broker: sim
+account_id: sim-0
+strategy: orb
+strategy_profile: config/profiles/surge.yml
+risk_policy: combine_50k
+
+data:
+  historical_root: data/parquet
+  historical_vendor: firstratedata
+  live_source: ib
+  symbol_primary: MNQ
+  bar_seconds: 60
+
+telegram:
+  bot_token_env: TELEGRAM_BOT_TOKEN
+  chat_id_env: TELEGRAM_CHAT_ID
+  min_severity: WARN
+
+news_calendar: config/news_calendar.yml
+
+flat_by_warning_ct: "14:00:00"
+flat_by_force_ct:   "15:10:00"
+halt_on_journal_desync: true

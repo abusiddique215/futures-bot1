@@ -131,3 +131,19 @@ def test_flat_by_force_strictly_after_is_valid() -> None:
     }
     c = BotConfig(**kwargs)
     assert c.flat_by_force_ct == time(15, 10)
+
+
+# ---- load_config() from disk -------------------------------------------------
+
+# Path-robust: anchor to the repo root via __file__ instead of CWD, so the test
+# passes regardless of where pytest is invoked from.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_load_config_from_example_yaml() -> None:
+    from bot.config import load_config
+    c = load_config(_PROJECT_ROOT / "config" / "bot.example.yml")
+    assert c.env == "dev"
+    assert c.broker == "sim"
+    assert c.data.symbol_primary == "MNQ"
+    assert c.telegram.min_severity == "WARN"
