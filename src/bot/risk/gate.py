@@ -80,8 +80,15 @@ class TopstepRiskGate:
         if decision is not None:
             return decision
 
-        # Rules 4-7 land in subsequent tasks. For now, after rules 1-3 pass,
-        # approve unconditionally.
+        decision = self._check_max_position(intent, state)
+        if decision is not None:
+            return decision
+
+        decision = self._check_news_throttle(intent, state)
+        if decision is not None:
+            return decision
+
+        # Rules 6-7 land in T11. For now, after rules 1-5 pass, approve.
         return ApprovedOrder(
             intent=intent, state_snapshot=state, timestamp=state.timestamp,
         )
@@ -157,6 +164,51 @@ class TopstepRiskGate:
             return OrderDenied(
                 intent=intent, reason="MLL phantom would be breached",
                 rule="MLL",
+                state_snapshot=state, timestamp=state.timestamp,
+            )
+        return None
+
+    def _check_max_position(
+        self, intent: OrderIntent, state: AccountState,
+    ) -> OrderDenied | None:
+        """Rule 4: per-symbol position cap. Spec 04 §3.2 rule 4.
+
+        Cap comes from the active DrawdownPolicy (Combine: fixed 5 NQ / 50 MNQ
+        at $50K; EFA: profit-gated 2/3/5 minis verified 2026-05-22).
+        """
+        current = state.open_positions.get(intent.symbol, 0)
+        projected = current + intent.signed_qty()
+        cap = self.policy.max_position(intent.symbol, state)
+        if abs(projected) > cap:
+            return OrderDenied(
+                intent=intent,
+                reason=f"projected |{projected}| > cap {cap} for {intent.symbol}",
+                rule="MAX_POSITION",
+                state_snapshot=state, timestamp=state.timestamp,
+            )
+        return None
+
+    def _check_news_throttle(
+        self, intent: OrderIntent, state: AccountState,
+    ) -> OrderDenied | None:
+        """Rule 5: news-window position cap. Spec 04 §3.2 rule 5.
+
+        Only applies to OPEN-INCREASING orders during a high-impact news window.
+        Reducers and orders outside windows are allowed regardless of size.
+        """
+        if not self.news_calendar.in_window(state.timestamp):
+            return None
+        # Spec §3.2 rule 5: window only caps OPENING + sizing orders.
+        if not intent.is_open_increasing_exposure(state.open_positions):
+            return None
+        current = state.open_positions.get(intent.symbol, 0)
+        projected = abs(current + intent.signed_qty())
+        news_cap = self.news_calendar.max_position_during_window()
+        if projected > news_cap:
+            return OrderDenied(
+                intent=intent,
+                reason=f"news window: |{projected}| > cap {news_cap}",
+                rule="NEWS_THROTTLE",
                 state_snapshot=state, timestamp=state.timestamp,
             )
         return None
