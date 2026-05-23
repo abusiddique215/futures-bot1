@@ -13,7 +13,9 @@ Spec: 02-execution-clients.md §3.3 (reconnect), §3.5 (bracket-translation),
 """
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -26,6 +28,15 @@ from bot.types import (
     Position,
 )
 
+if TYPE_CHECKING:
+    from ib_async import IB, Contract
+
+log = logging.getLogger(__name__)
+
+# Reconnect schedule (spec 02 §3.3): exponential backoff, capped at 60s.
+_RECONNECT_BACKOFF: tuple[int, ...] = (1, 2, 4, 8, 16, 32, 60)
+_RECONNECT_DEADLINE_SECONDS = 300  # 5 minutes
+
 # IB orderType strings → our OrderType literal.
 _IB_ORDER_TYPE_MAP: dict[str, str] = {
     "MKT": "MARKET",
@@ -33,9 +44,6 @@ _IB_ORDER_TYPE_MAP: dict[str, str] = {
     "STP": "STOP",
     "STP LMT": "STOP_LIMIT",
 }
-
-if TYPE_CHECKING:
-    from ib_async import IB, Contract
 
 
 def _default_ib_factory() -> IB:
@@ -58,11 +66,15 @@ class IBExecutionClient:
         port: int,
         client_id: int,
         ib_factory: Callable[[], Any] | None = None,
+        sleep: Callable[[float], Awaitable[None]] | None = None,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self.host = host
         self.port = port
         self.client_id = client_id
         self._ib_factory: Callable[[], Any] = ib_factory or _default_ib_factory
+        self._sleep: Callable[[float], Awaitable[None]] = sleep or asyncio.sleep
+        self._now: Callable[[], datetime] = now or (lambda: datetime.now(UTC))
         self._ib: Any | None = None
         self._contracts: dict[str, Contract] = {}
         self._recent: dict[str, OrderEvent] = {}
@@ -70,6 +82,10 @@ class IBExecutionClient:
         # For BRACKET, only the parent trade is recorded under client_order_id;
         # canceling the parent cancels the OCO group on the IB side.
         self._open_trades: dict[str, tuple[str, Any]] = {}
+        # Set True after the 5-min reconnect deadline expires without
+        # success. The host engine watches this flag and triggers
+        # force-flatten via the risk gate (full wiring lands in Plan 7).
+        self._reconnect_failed: bool = False
 
     async def connect(self) -> None:
         """Create IB instance, connect to gateway, qualify the MNQ contract."""
@@ -277,3 +293,37 @@ class IBExecutionClient:
             is_combine=True,
             timestamp=datetime.now(UTC),
         )
+
+    # ---- reconnect strategy ---------------------------------------------
+
+    async def reconnect(self) -> None:
+        """Re-establish the IB connection with exponential backoff.
+
+        Schedule: 1, 2, 4, 8, 16, 32, 60, 60, 60, … seconds.
+        After 5 minutes of wall-clock without success, gives up: sets
+        _reconnect_failed=True and emits a structured ERROR log. The host
+        engine watches the flag and triggers force-flatten through the
+        risk gate (full wiring lands in Plan 7).
+
+        Each retry creates a fresh IB instance via the ib_factory so a
+        zombie connection isn't dragged along.
+        """
+        start = self._now()
+        attempt = 0
+        while True:
+            try:
+                await self.connect()
+                return
+            except Exception as exc:
+                attempt += 1
+                log.warning("ib reconnect attempt %d failed: %s", attempt, exc)
+            if (self._now() - start).total_seconds() >= _RECONNECT_DEADLINE_SECONDS:
+                self._reconnect_failed = True
+                log.error(
+                    "ib reconnect deadline exceeded after %d attempts — "
+                    "alerting and stopping retries",
+                    attempt,
+                )
+                return
+            wait = _RECONNECT_BACKOFF[min(attempt - 1, len(_RECONNECT_BACKOFF) - 1)]
+            await self._sleep(wait)
