@@ -42,6 +42,12 @@ class SimExecutionClient:
         return None
 
     async def place_order(self, intent: OrderIntent) -> OrderEvent:
+        return self.register_intent(intent)
+
+    def register_intent(self, intent: OrderIntent) -> OrderEvent:
+        """Sync ledger registration. Called by async place_order AND by the
+        sync BacktestEngine — same operation, different driver. Returns the
+        PENDING OrderEvent (the async place_order awaits and returns the same)."""
         broker_order_id = f"sim-{next(self._broker_id_counter)}"
         self._placed[intent.client_order_id] = (intent, broker_order_id)
         return OrderEvent(
