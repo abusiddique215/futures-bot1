@@ -1,23 +1,27 @@
 """LiveTradingLoop — the live counterpart to BacktestEngine.
 
 Per-bar pipeline (mirrors `BacktestEngine._run_collect`):
-  1. await gate.force_flatten_now()       — drain pending flatten from last iter
+  0. break if stop_event is set                  — SIGTERM clean shutdown (T4)
+  1. await gate.force_flatten_now()              — drain pending flatten from last iter
   2. tracker.mark_to_market(bar)
   3. state = tracker.snapshot(bar.timestamp)
-  4. state = gate.on_tick(state)          — state-machine update; may schedule flatten
+  4. state = gate.on_tick(state)                 — state-machine update; may schedule flatten
   5. intents = strategy.on_bar(bar, state)
   6. for each intent: gate.approve_or_deny → if approved, sim place + record fill +
      journal record. If denied, journal record decision.
   7. journal record_equity_snapshot
-  8. heartbeat write (if 30s elapsed since last)  — wired in T3
+  8. heartbeat write (if 30s elapsed since last)
   9. break if max_bars reached
 
-T2 ships the core loop. T3 wires the heartbeat writer; T4 wires SIGTERM shutdown.
-Until those land, `heartbeat_path` is accepted by the ctor (forward-compat) but
-not written, and `stop_event` is absent.
+On shutdown (stop_event set), the loop:
+  - calls `gate.force_flatten_now("SHUTDOWN")` — cancels open orders, closes
+    positions at the broker, permanently disables the strategy
+  - returns control to the caller (main.py) which closes broker + journal
+    in its finally block
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -60,15 +64,29 @@ class LiveTradingLoop:
         self._symbol = symbol
 
     async def run(
-        self, bar_source: LiveBarSource, *, max_bars: int | None = None,
+        self,
+        bar_source: LiveBarSource,
+        *,
+        max_bars: int | None = None,
+        stop_event: asyncio.Event | None = None,
     ) -> None:
         """Consume `bar_source`'s subscribe() stream and run the bot pipeline.
 
         Returns when the source exhausts itself, when `max_bars` bars have
-        been processed, or when shutdown is signalled (T4).
+        been processed, or when `stop_event` is set (SIGTERM shutdown).
+
+        On shutdown a force-flatten is issued so any open position is closed
+        before control returns; the strategy is then permanently disabled by
+        the gate for the rest of the session.
         """
         bars_seen = 0
         async for bar in bar_source.subscribe():
+            # 0. Shutdown check — runs BEFORE we touch the bar so the loop
+            #    can't half-process a bar (snapshot one bar, fail to write the
+            #    fill, etc.).
+            if stop_event is not None and stop_event.is_set():
+                await self._gate.force_flatten_now("SHUTDOWN")
+                return
             # 1. Drain any pending flatten request scheduled by the previous
             #    iteration's on_tick. No-op if nothing pending.
             await self._gate.force_flatten_now()
