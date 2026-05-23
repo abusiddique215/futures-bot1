@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.topstepbot</string>
+
+    <!-- Run `docker compose up` against the project's compose file. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/docker</string>
+        <string>compose</string>
+        <string>-f</string>
+        <string>__PROJECT_DIR__/docker-compose.yml</string>
+        <string>up</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_DIR__</string>
+
+    <!-- Auto-start on user login. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- KeepAlive: restart on unclean exit (anything except exit 0). -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <!-- Throttle to one restart per 10s so a crash-loop doesn't pin the CPU. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Logs land next to the LaunchAgent so a single tail covers both. -->
+    <key>StandardOutPath</key>
+    <string>__PROJECT_DIR__/deploy/logs/topstepbot.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJECT_DIR__/deploy/logs/topstepbot.err.log</string>
+
+    <!-- Inherit user PATH so docker on /usr/local/bin or /opt/homebrew/bin
+         resolves. EnvironmentVariables is intentionally minimal — secrets
+         load via .env inside the container, NOT here. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>
