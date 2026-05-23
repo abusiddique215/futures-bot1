@@ -77,6 +77,10 @@ class BotConfig(BaseModel):
     # a Path on local disk for live (NEVER on iCloud Drive — SQLite WAL
     # is unsafe on iCloud).
     journal_path: str = ":memory:"
+    # Plan 10 T5 — where LiveTradingLoop writes the liveness heartbeat
+    # (atomic-rename, 30s cadence). launchd / external monitors read this
+    # file's mtime to detect a stalled bot.
+    heartbeat_path: Path = Path("state/heartbeat")
 
     @field_validator("broker")
     @classmethod

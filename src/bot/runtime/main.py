@@ -176,18 +176,96 @@ async def snapshot_journal(journal: Any) -> JournalState:
     )
 
 
-# ---- Event-loop placeholder -------------------------------------------------
+# ---- Default factories for Strategy + BarSource (Plan 10 T5) ---------------
+
+def _resolve_strategy(cfg: BotConfig) -> Any:
+    """Build the Strategy for `cfg.strategy`.
+
+    Plan 10 ships the wiring with a PlaceholderStrategy default — the
+    LiveTradingLoop is fully exercised in tests + smoke runs without
+    requiring real ORB warmup bars. The ORB factory (ORBProfile YAML →
+    OpeningRangeBreakoutStrategy) lands in a follow-up plan; intentionally
+    out of scope here to keep T5 to a single concern (loop wiring).
+    """
+    _ = cfg
+    from bot.backtest.strategy import PlaceholderStrategy
+    return PlaceholderStrategy()
+
+
+def _resolve_bar_source(cfg: BotConfig, broker: Any) -> Any:
+    """Build the LiveBarSource for `cfg.broker` + `cfg.data.live_source`.
+
+    For `broker=sim` (dev / smoke / backtest) the default is an EMPTY
+    SimBarSource — the LiveTradingLoop iterates zero bars and exits
+    immediately, keeping the Plan 9 `--check` smoke test green. Real
+    live sources (IBLiveBarStream, TopstepX market-data adapter) are
+    wired in their respective broker-integration plans.
+    """
+    _ = (cfg, broker)
+    from bot.runtime.bar_source import SimBarSource
+    return SimBarSource([])
+
+
+# ---- Default event loop (Plan 10 T5: real LiveTradingLoop) ------------------
 
 async def _default_event_loop(state: RuntimeState) -> None:
-    """Default no-op event loop.
+    """Construct + run a LiveTradingLoop driven by `state`'s broker/journal.
 
-    Plan 9 ships the runtime scaffold. The actual live event loop (Strategy
-    pumping bars, gate.approve_or_deny per intent, broker.place_order) is
-    spec'd in 03/04 and will be wired in a subsequent plan. For now `main()`
-    returns immediately after hydrate — a deliberate stub so --check works
-    end-to-end and live runs no-op cleanly until the loop ships.
+    Strategy + bar source come from the resolver factories above. For
+    `env=dev` + `broker=sim` the default bar source is empty, so this
+    function returns immediately — preserving the Plan 9 smoke test.
+
+    Plan 10 T5 wired this in; Plan 9 shipped a no-op stub here.
     """
-    log.info("event loop placeholder reached (no-op); state=%s", state.positions)
+    from bot.backtest.tracker import AccountStateTracker
+    from bot.observability.bus import NoopTelemetryBus
+    from bot.runtime.live_loop import LiveTradingLoop
+
+    gate = _build_gate(state)
+    tracker = AccountStateTracker(
+        start_balance=state.equity,
+        is_combine=state.cfg.risk_policy.startswith("combine"),
+    )
+    loop = LiveTradingLoop(
+        strategy=_resolve_strategy(state.cfg),
+        gate=gate,
+        tracker=tracker,
+        broker=state.broker,
+        journal=state.journal,
+        telemetry=NoopTelemetryBus(),
+        heartbeat_path=state.cfg.heartbeat_path,
+        symbol=state.cfg.data.symbol_primary,
+    )
+    await loop.run(_resolve_bar_source(state.cfg, state.broker))
+
+
+def _build_gate(state: RuntimeState) -> Any:
+    """Construct a TopstepRiskGate wired to the runtime broker + a no-op news
+    calendar. The full news calendar load (YAML) is Plan 5 territory; the
+    risk gate accepts any object satisfying the NewsCalendar Protocol.
+    """
+    from bot.observability.bus import NoopTelemetryBus
+    from bot.risk.combine_drawdown import CombineIntradayDrawdown
+    from bot.risk.config import RiskConfig
+    from bot.risk.gate import TopstepRiskGate
+
+    class _NoopNews:
+        def in_window(self, now: Any) -> bool:
+            _ = now
+            return False
+
+        def max_position_during_window(self) -> int:
+            return 1
+
+    risk_cfg = RiskConfig(env="backtest", accounts_managed=1)
+    policy = CombineIntradayDrawdown(50_000, 2_000, 5)
+    return TopstepRiskGate(
+        policy=policy,
+        news_calendar=_NoopNews(),
+        execution_client=state.broker,
+        telemetry=NoopTelemetryBus(),
+        config=risk_cfg,
+    )
 
 
 # ---- The orchestrator -------------------------------------------------------
@@ -221,6 +299,8 @@ async def main(
     open_journal_fn: Callable[[str], Awaitable[Any]] | None = None,
     connect_broker_fn: Callable[[BotConfig, SecretsDict], Awaitable[Any]] | None = None,
     event_loop_fn: Callable[[RuntimeState], Awaitable[None]] | None = None,
+    bar_source_fn: Callable[[BotConfig, Any], Any] | None = None,
+    strategy_fn: Callable[[BotConfig], Any] | None = None,
     hostname_fn: Callable[[], str] | None = None,
     bus: _Bus | None = None,
     cwd: Path | None = None,
@@ -229,12 +309,43 @@ async def main(
     """Execute the 8-step startup contract. Returns a POSIX exit code.
 
     All external deps are injectable for testing. Production callers pass
-    nothing; defaults dispatch to the real helpers.
+    nothing; defaults dispatch to the real helpers. `bar_source_fn` /
+    `strategy_fn` let Plan 10 tests drive the loop with synthetic bars
+    + a one-shot strategy without monkey-patching the resolver module
+    globals.
     """
     _load_config = load_config_fn or _default_load_config
     _open_journal = open_journal_fn or _default_open_journal
     _connect_broker = connect_broker_fn or _default_connect_broker
-    _event_loop = event_loop_fn or _default_event_loop
+    # When a custom bar_source/strategy is supplied, build an event loop that
+    # uses it. Otherwise fall through to _default_event_loop (which uses the
+    # module-level resolvers).
+    if event_loop_fn is not None:
+        _event_loop = event_loop_fn
+    elif bar_source_fn is not None or strategy_fn is not None:
+        _bs_fn = bar_source_fn or _resolve_bar_source
+        _st_fn = strategy_fn or _resolve_strategy
+        async def _custom_event_loop(state: RuntimeState) -> None:
+            from bot.backtest.tracker import AccountStateTracker
+            from bot.observability.bus import NoopTelemetryBus
+            from bot.runtime.live_loop import LiveTradingLoop
+            gate = _build_gate(state)
+            tracker = AccountStateTracker(
+                start_balance=state.equity,
+                is_combine=state.cfg.risk_policy.startswith("combine"),
+            )
+            loop = LiveTradingLoop(
+                strategy=_st_fn(state.cfg),
+                gate=gate, tracker=tracker,
+                broker=state.broker, journal=state.journal,
+                telemetry=NoopTelemetryBus(),
+                heartbeat_path=state.cfg.heartbeat_path,
+                symbol=state.cfg.data.symbol_primary,
+            )
+            await loop.run(_bs_fn(state.cfg, state.broker))
+        _event_loop = _custom_event_loop
+    else:
+        _event_loop = _default_event_loop
     _bus: _Bus = bus or _NullBus()
     _cwd = cwd or Path.cwd()
 
