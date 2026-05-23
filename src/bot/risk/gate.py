@@ -6,12 +6,18 @@ boundary tests.
 
 Tasks 8-15 add the seven rule checks + stop-offset buffer.
 Tasks 16-17 add on_tick + force_flatten.
+
+Plan 7 T9: `telemetry` defaults to a NoopTelemetryBus and accepts any object
+satisfying `_Telemetry` (sync `alert(kind, **kw)`). The canonical wiring is to
+pass a `bot.observability.bus.TelemetryBus`; legacy stub Telemetry objects from
+earlier-plan tests still work via duck typing.
 """
 from __future__ import annotations
 
 from typing import ClassVar, Protocol, runtime_checkable
 
 from bot.execution.ports import ExecutionClient
+from bot.observability.bus import NoopTelemetryBus
 from bot.risk.cancel_tracker import RollingRatioTracker
 from bot.risk.config import RiskConfig
 from bot.risk.news import NewsCalendar
@@ -26,7 +32,13 @@ from bot.types import (
 
 @runtime_checkable
 class _Telemetry(Protocol):
-    """Minimal Protocol for telemetry; satisfied by Plan 7's full impl."""
+    """Minimal Protocol for telemetry; satisfied by Plan 7's full impl.
+
+    A `bot.observability.bus.TelemetryBus` is structurally compatible (it has a
+    sync `alert(kind, **kw)` method). For async-only fan-out, prefer the bus's
+    `aalert(...)` from async call sites — `force_flatten_now` does this when it
+    detects the telemetry IS a TelemetryBus.
+    """
     def alert(self, kind: str, **kw: object) -> None: ...
 
 
@@ -60,8 +72,8 @@ class TopstepRiskGate:
         policy: DrawdownPolicy,
         news_calendar: NewsCalendar,
         execution_client: ExecutionClient,
-        telemetry: _Telemetry,
         config: RiskConfig,
+        telemetry: _Telemetry | None = None,
         journal_provider: JournalProvider | None = None,
     ) -> None:
         assert config.accounts_managed == 1, (
@@ -78,7 +90,9 @@ class TopstepRiskGate:
         self.policy = policy
         self.news_calendar = news_calendar
         self.execution_client = execution_client
-        self.telemetry = telemetry
+        # Plan 7 T9: default to a no-op bus so tests don't have to provide one.
+        # Canonical wiring passes a bot.observability.bus.TelemetryBus.
+        self.telemetry: _Telemetry = telemetry if telemetry is not None else NoopTelemetryBus()
         self.config = config
         self.journal_provider: JournalProvider = journal_provider or _NoopJournalProvider()
         self.cancel_to_fill_tracker = RollingRatioTracker(window_minutes=60)
