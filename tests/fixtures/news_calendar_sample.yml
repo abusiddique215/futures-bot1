@@ -1,0 +1,13 @@
+events:
+  - time: 2026-06-12T08:30:00-05:00
+    name: CPI
+    impact: high
+  - time: 2026-06-18T14:00:00-05:00
+    name: FOMC
+    impact: high
+  - time: 2026-07-04T10:00:00-05:00
+    name: Random_low_event
+    impact: low
+window_minutes_before: 5
+window_minutes_after: 15
+max_position_during_window: 1
