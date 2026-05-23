@@ -54,8 +54,15 @@ plugins = ["pydantic.mypy"]
 cache_dir = "/tmp/mypy-topstep-bot"
 
 [[tool.mypy.overrides]]
-module = ["nautilus_trader.*", "ib_async.*", "project_x.*"]
+module = ["nautilus_trader.*", "ib_async.*", "project_x.*", "pyarrow.*"]
 ignore_missing_imports = true
+
+# Files that USE pyarrow may invoke functions whose internal callees mypy
+# flags as no-untyped-call (pq.write_table → C bindings). Suppress that one
+# error category in data modules; everything else stays strict.
+[[tool.mypy.overrides]]
+module = ["bot.data.firstratedata", "bot.data.continuous"]
+disable_error_code = ["no-untyped-call"]
 
 # Tests are explicit code; we don't enforce strict typing inside them so that
 # pytest fixture parameters can be written `(utc_now)` instead of

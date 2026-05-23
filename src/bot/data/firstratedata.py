@@ -183,7 +183,7 @@ class FirstRateDataLoader:
                 )
                 part_dir.mkdir(parents=True, exist_ok=True)
                 table = pa.Table.from_pylist(recs, schema=_PARQUET_SCHEMA)
-                pq.write_table(table, part_dir / "part-0.parquet")  # type: ignore[no-untyped-call]
+                pq.write_table(table, part_dir / "part-0.parquet")
                 rows_written += len(recs)
             rows_quarantined += bad
 
