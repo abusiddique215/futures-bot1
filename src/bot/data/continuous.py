@@ -14,9 +14,12 @@ from datetime import date
 from itertools import pairwise
 from pathlib import Path
 
+import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
 from bot.data.contract_calendar import parse_contract_code
+from bot.data.firstratedata import FirstRateDataLoader
 from bot.types import Bar
 
 
@@ -174,3 +177,92 @@ class ContinuousAdjuster:
                     ))
         all_bars.sort(key=lambda b: b.timestamp)
         yield from all_bars
+
+    def write_continuous(self, symbol: str) -> None:
+        """Compute rolls, apply adjustments, write to `continuous/symbol=<>/`.
+
+        Also writes a `roll_events.parquet` sidecar for audit.
+        """
+        from datetime import UTC, datetime
+
+        rolls_raw = self.compute_ratios(symbol)
+        # Compute cumulative_scale: newest roll has cs = c_new/c_old.
+        # Older rolls multiply their inverse-ratio on top.
+        rolls: list[RollEvent] = []
+        cumulative = 1.0
+        for r in reversed(rolls_raw):
+            cumulative *= (r.c_new_close / r.c_old_close)
+            rolls.append(RollEvent(
+                symbol=r.symbol, roll_date=r.roll_date,
+                old_contract=r.old_contract, new_contract=r.new_contract,
+                c_old_close=r.c_old_close, c_new_close=r.c_new_close,
+                ratio=r.ratio, cumulative_scale=cumulative,
+            ))
+        rolls.reverse()  # back to oldest-first
+
+        # Load all per-contract bars for this symbol
+        bars_by_contract: dict[str, list[Bar]] = {}
+        contracts = _list_contracts(self._parquet_root, symbol)
+        loader = FirstRateDataLoader(
+            raw_root=self._parquet_root,  # not used by load()
+            parquet_root=self._parquet_root,
+        )
+        for c in contracts:
+            bars = list(loader.load(
+                symbol=symbol, contract=c,
+                start=datetime(1970, 1, 1, tzinfo=UTC),
+                end=datetime(2099, 12, 31, tzinfo=UTC),
+            ))
+            bars_by_contract[c] = bars
+
+        # Apply adjustments
+        adjusted = list(self.adjust_with_rolls(bars_by_contract, rolls))
+
+        # Write continuous parquet, partitioned by year/month
+        cont_root = self._parquet_root / "continuous" / f"symbol={symbol}"
+        bars_by_ym: dict[tuple[int, int], list[Bar]] = {}
+        for b in adjusted:
+            key = (b.timestamp.year, b.timestamp.month)
+            bars_by_ym.setdefault(key, []).append(b)
+        schema = pa.schema([
+            pa.field("timestamp", pa.timestamp("ns", tz="UTC")),
+            pa.field("open",   pa.float64()),
+            pa.field("high",   pa.float64()),
+            pa.field("low",    pa.float64()),
+            pa.field("close",  pa.float64()),
+            pa.field("volume", pa.int64()),
+        ])
+        for (year, month), bars in bars_by_ym.items():
+            part_dir = cont_root / f"year={year}" / f"month={month:02d}"
+            part_dir.mkdir(parents=True, exist_ok=True)
+            recs = [{
+                "timestamp": b.timestamp,
+                "open": b.open, "high": b.high, "low": b.low, "close": b.close,
+                "volume": b.volume,
+            } for b in bars]
+            table = pa.Table.from_pylist(recs, schema=schema)
+            pq.write_table(table, part_dir / "part-0.parquet")
+
+        # Sidecar: roll_events.parquet (always written, even if empty rolls list)
+        (self._parquet_root / "continuous").mkdir(parents=True, exist_ok=True)
+        roll_schema = pa.schema([
+            pa.field("symbol", pa.string()),
+            pa.field("roll_date", pa.date32()),
+            pa.field("old_contract", pa.string()),
+            pa.field("new_contract", pa.string()),
+            pa.field("c_old_close", pa.float64()),
+            pa.field("c_new_close", pa.float64()),
+            pa.field("ratio", pa.float64()),
+            pa.field("cumulative_scale", pa.float64()),
+        ])
+        recs = [{
+            "symbol": r.symbol, "roll_date": r.roll_date,
+            "old_contract": r.old_contract, "new_contract": r.new_contract,
+            "c_old_close": r.c_old_close, "c_new_close": r.c_new_close,
+            "ratio": r.ratio, "cumulative_scale": r.cumulative_scale,
+        } for r in rolls]
+        table = pa.Table.from_pylist(recs, schema=roll_schema)
+        pq.write_table(
+            table,
+            self._parquet_root / "continuous" / "roll_events.parquet",
+        )
