@@ -198,3 +198,25 @@ class AccountState:
     lock_point: float | None = None
     start_balance: float = 50_000.0
     account_size: AccountSize = "50K"
+
+
+@dataclass(frozen=True)
+class OrderDenied:
+    """Result returned by TopstepRiskGate.approve_or_deny() on rule violation."""
+    intent: OrderIntent
+    reason: str                            # human-readable
+    rule: str                              # canonical, e.g. "DLL_NEAR_LIMIT"
+    state_snapshot: AccountState
+    timestamp: datetime
+
+
+@dataclass(frozen=True)
+class ApprovedOrder:
+    """Result returned by TopstepRiskGate.approve_or_deny() on approval.
+
+    `intent` is post-buffer-augmentation — its stop_loss_ticks may be tighter
+    than what the strategy originally emitted, per spec 04 §3.6.
+    """
+    intent: OrderIntent                    # post-buffer-augmentation
+    state_snapshot: AccountState
+    timestamp: datetime
