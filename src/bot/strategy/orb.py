@@ -13,6 +13,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from bot.types import Bar
+
 
 class ORBProfile(BaseModel):
     """Per-profile ORB tuning. Loaded from YAML by ``profile_loader.load_orb_profile``."""
@@ -28,3 +30,23 @@ class ORBProfile(BaseModel):
     session_start_et: time = time(9, 30)
     cutoff_time_et: time | None = None
     max_trades_per_day: int = Field(default=1, ge=1)
+
+
+def _compute_atr(bars: list[Bar], period: int) -> float | None:
+    """ATR = simple average of the last ``period`` True Ranges.
+
+    True Range = max(high-low, |high - prev_close|, |low - prev_close|).
+    Requires ``period + 1`` bars (one prior close + ``period`` TRs). Returns
+    ``None`` when fewer than ``period + 1`` bars are available.
+    """
+    if len(bars) < period + 1:
+        return None
+    trs: list[float] = []
+    for i in range(1, len(bars)):
+        prev_close = bars[i - 1].close
+        h = bars[i].high
+        low = bars[i].low
+        tr = max(h - low, abs(h - prev_close), abs(low - prev_close))
+        trs.append(tr)
+    last = trs[-period:]
+    return sum(last) / period
