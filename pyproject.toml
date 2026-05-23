@@ -21,6 +21,8 @@ dependencies = [
     "python-telegram-bot>=21.4",      # Telegram alerts (polling-safe outbound only)
     "aiosqlite>=0.20",                # async SQLite for Journal (WAL mode)
     "httpx>=0.27",                    # async HTTP for Telegram REST API
+    # Plan 8 deps (TopstepX live)
+    "project-x-py>=3.5.9,<4.0",       # TopstepX REST + SignalR (module name: project_x_py)
 ]
 
 [project.optional-dependencies]
@@ -46,6 +48,13 @@ asyncio_mode = "auto"
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning:nautilus_trader.*",
+    # project_x_py 3.5.9 calls uvloop.install() at import time and pulls in
+    # signalrcore + websocket-client, which leak sockets / event loops at
+    # interpreter shutdown. We can't fix third-party teardown; treat as warn-only.
+    "ignore::DeprecationWarning:uvloop",
+    "ignore::DeprecationWarning:project_x_py.*",
+    "ignore::pytest.PytestUnraisableExceptionWarning",
+    "ignore::ResourceWarning",
 ]
 
 [tool.mypy]
@@ -59,7 +68,7 @@ plugins = ["pydantic.mypy"]
 cache_dir = "/tmp/mypy-topstep-bot"
 
 [[tool.mypy.overrides]]
-module = ["nautilus_trader.*", "ib_async.*", "project_x.*", "pyarrow.*"]
+module = ["nautilus_trader.*", "ib_async.*", "project_x_py.*", "pyarrow.*"]
 ignore_missing_imports = true
 
 # Files that USE pyarrow may invoke functions whose internal callees mypy
