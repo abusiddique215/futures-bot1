@@ -23,6 +23,8 @@ dependencies = [
     "httpx>=0.27",                    # async HTTP for Telegram REST API
     # Plan 8 deps (TopstepX live)
     "project-x-py>=3.5.9,<4.0",       # TopstepX REST + SignalR (module name: project_x_py)
+    # Plan 9 deps (Mac deploy / runtime)
+    "python-dotenv>=1.0",             # .env file loading for load_secrets()
 ]
 
 [project.optional-dependencies]
