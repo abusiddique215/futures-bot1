@@ -16,6 +16,11 @@ dependencies = [
     "nautilus-trader>=1.227,<1.228",  # pre-Plan-1 verification confirmed Py3.12/3.13 wheels exist
     "ib-async>=1.0.3",                # for IB live data feed (skeleton here; full impl Plan 6)
     "pyarrow>=16.0",                  # partitioned-parquet scans for backtest
+    # Plan 7 deps (observability)
+    "loguru>=0.7",                    # JSON-lines structured logging
+    "python-telegram-bot>=21.4",      # Telegram alerts (polling-safe outbound only)
+    "aiosqlite>=0.20",                # async SQLite for Journal (WAL mode)
+    "httpx>=0.27",                    # async HTTP for Telegram REST API
 ]
 
 [project.optional-dependencies]
