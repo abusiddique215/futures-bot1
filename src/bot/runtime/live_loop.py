@@ -27,6 +27,7 @@ from bot.backtest.tracker import AccountStateTracker
 from bot.journal.journal import Journal
 from bot.risk.gate import TopstepRiskGate
 from bot.runtime.bar_source import LiveBarSource
+from bot.runtime.heartbeat import Heartbeat
 from bot.types import ApprovedOrder
 
 
@@ -55,7 +56,7 @@ class LiveTradingLoop:
         self._broker = broker
         self._journal = journal
         self._telemetry = telemetry
-        self._heartbeat_path = heartbeat_path
+        self._heartbeat = Heartbeat(heartbeat_path)
         self._symbol = symbol
 
     async def run(
@@ -113,6 +114,11 @@ class LiveTradingLoop:
             # 7. Equity snapshot at the end of the bar.
             final_state = self._tracker.snapshot(timestamp=bar.timestamp)
             await self._journal.record_equity_snapshot(final_state)
+
+            # 8. Heartbeat — first bar always writes; subsequent writes
+            #    gated at 30s.
+            if self._heartbeat.should_write_at(bar.timestamp):
+                self._heartbeat.write_now(bar.timestamp)
 
             bars_seen += 1
             if max_bars is not None and bars_seen >= max_bars:
