@@ -9,14 +9,13 @@ description = "Topstep futures trading bot — NQ/MNQ, NautilusTrader runtime"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"  # 3.12 + 3.13 both supported; nautilus-trader 1.227 covers both per pre-Plan-1 verification
 dependencies = [
-    # Plan 1 imports only these two. Heavier deps (nautilus-trader, ib-async,
-    # project-x-py, pyarrow, aiosqlite, python-telegram-bot, loguru,
-    # pydantic-settings, python-dotenv) are added by the plan that first
-    # imports them, to keep Plan 1's install fast and to avoid the Rust
-    # toolchain build cost + the project-x-py PyPI-name uncertainty until
-    # Plan 8 actually needs it.
+    # Plan 1 deps
     "pydantic>=2.7",
     "pyyaml>=6.0",
+    # Plan 2 deps
+    "nautilus-trader>=1.227,<1.228",  # pre-Plan-1 verification confirmed Py3.12/3.13 wheels exist
+    "ib-async>=1.0.3",                # for IB live data feed (skeleton here; full impl Plan 6)
+    "pyarrow>=16.0",                  # partitioned-parquet scans for backtest
 ]
 
 [project.optional-dependencies]
