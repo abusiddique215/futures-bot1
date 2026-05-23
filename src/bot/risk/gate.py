@@ -83,11 +83,20 @@ class TopstepRiskGate:
         self.journal_provider: JournalProvider = journal_provider or _NoopJournalProvider()
         self.cancel_to_fill_tracker = RollingRatioTracker(window_minutes=60)
         self._flattening = False
+        self._strategy_disabled = False
+        self._pending_flatten_reason: str | None = None
 
     def approve_or_deny(
         self, intent: OrderIntent, state: AccountState,
     ) -> ApprovedOrder | OrderDenied:
         """Pre-trade gate. Spec 04 §3.2."""
+        if self._strategy_disabled:
+            return OrderDenied(
+                intent=intent,
+                reason="strategy disabled after force-flatten",
+                rule="STRATEGY_DISABLED",
+                state_snapshot=state, timestamp=state.timestamp,
+            )
         decision = self._check_hard_flat(intent, state)
         if decision is not None:
             return decision
@@ -316,3 +325,48 @@ class TopstepRiskGate:
                 state_snapshot=state, timestamp=state.timestamp,
             )
         return None
+
+    # ---- Tick-driven state machine + force-flatten ------------------------
+
+    def on_tick(self, state: AccountState) -> AccountState:
+        """Driver calls this on every tick. Updates the policy state machine
+        and schedules a force-flatten if equity touches the phantom-MLL floor.
+        """
+        new_state = self.policy.update_on_tick(state)
+        phantom = self.policy.phantom_mll(new_state)
+        if new_state.equity <= phantom:
+            self._schedule_force_flatten("MLL_EQUITY_TOUCH")
+        return new_state
+
+    def _schedule_force_flatten(self, reason: str) -> None:
+        """Latch a force-flatten request. Second call while one is in flight
+        is a no-op (idempotent — spec 04 §3.5)."""
+        if self._flattening:
+            return
+        self._flattening = True
+        self._pending_flatten_reason = reason
+
+    async def force_flatten_now(self, reason: str | None = None) -> None:
+        """Drain a pending or directly-requested force-flatten.
+
+        Called by the driver's event loop (or by clock-alert at 15:10 CT).
+        After this returns, the strategy is permanently disabled for the
+        session — all subsequent approve_or_deny calls return STRATEGY_DISABLED.
+        """
+        if reason is not None:
+            self._schedule_force_flatten(reason)
+        if self._pending_flatten_reason is None:
+            return
+        flatten_reason = self._pending_flatten_reason
+        try:
+            await self.execution_client.cancel_all(symbol="MNQ")
+            close_all = getattr(self.execution_client, "close_all_positions", None)
+            if close_all is not None:
+                await close_all()
+            self.telemetry.alert("FORCE_FLATTEN", reason=flatten_reason)
+        except Exception as e:
+            self.telemetry.alert("FORCE_FLATTEN_FAILED", reason=flatten_reason, error=str(e))
+            raise
+        finally:
+            self._pending_flatten_reason = None
+            self._strategy_disabled = True
