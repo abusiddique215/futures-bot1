@@ -9,9 +9,18 @@ falls back to `memory` (SQLite spec) — tests tolerate either.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 import aiosqlite
 
 from bot.journal.schema import DDL_STATEMENTS
+from bot.types import (
+    AccountState,
+    Order,
+    OrderEvent,
+    OrderIntent,
+    Position,
+)
 
 
 class Journal:
@@ -77,3 +86,140 @@ class Journal:
         row = await cursor.fetchone()
         await cursor.close()
         return str(row[0]).lower() if row is not None else "unknown"
+
+    # ---- record_* event writers --------------------------------------------
+
+    async def record_order(self, order: Order) -> None:
+        """Insert an order snapshot (broker-reported open order)."""
+        await self._conn.execute(
+            """
+            INSERT OR REPLACE INTO orders (
+                client_order_id, broker_order_id, symbol, side, quantity,
+                order_type, status, limit_price, stop_price, timestamp, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                order.client_order_id,
+                order.broker_order_id,
+                order.symbol,
+                order.side,
+                order.quantity,
+                order.order_type,
+                order.status,
+                order.limit_price,
+                order.stop_price,
+                order.timestamp.isoformat(),
+                None,
+            ),
+        )
+        await self._conn.commit()
+
+    async def record_fill(self, event: OrderEvent) -> None:
+        """Insert a fill event (or any OrderEvent — schema is flexible)."""
+        await self._conn.execute(
+            """
+            INSERT INTO fills (
+                client_order_id, broker_order_id, status, filled_quantity,
+                avg_fill_price, timestamp, metadata
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.client_order_id,
+                event.broker_order_id,
+                event.status,
+                event.filled_quantity,
+                event.avg_fill_price,
+                event.timestamp.isoformat(),
+                None,
+            ),
+        )
+        await self._conn.commit()
+
+    async def record_position(self, position: Position) -> None:
+        """Insert a position snapshot (broker-reported)."""
+        await self._conn.execute(
+            """
+            INSERT INTO positions (
+                symbol, signed_qty, avg_entry_price, unrealized_pnl,
+                opened_at, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                position.symbol,
+                position.signed_qty,
+                position.avg_entry_price,
+                position.unrealized_pnl,
+                position.opened_at.isoformat(),
+                position.opened_at.isoformat(),  # tracker-reported snapshot ts
+            ),
+        )
+        await self._conn.commit()
+
+    async def record_risk_decision(
+        self,
+        *,
+        intent: OrderIntent,
+        approved: bool,
+        rule: str | None,
+        reason: str | None,
+        timestamp: datetime,
+    ) -> None:
+        """Insert a gate decision (one row per approve_or_deny call).
+
+        For approvals: pass rule=None, reason=None.
+        For denials:   pass rule + reason from OrderDenied.
+        """
+        await self._conn.execute(
+            """
+            INSERT INTO risk_decisions (
+                client_order_id, approved, rule, reason,
+                symbol, side, quantity, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                intent.client_order_id,
+                1 if approved else 0,
+                rule,
+                reason,
+                intent.symbol,
+                intent.side,
+                intent.quantity,
+                timestamp.isoformat(),
+            ),
+        )
+        await self._conn.commit()
+
+    async def record_equity_snapshot(self, state: AccountState) -> None:
+        """Insert a snapshot of AccountState (one row per tick or per minute)."""
+        await self._conn.execute(
+            """
+            INSERT INTO equity_snapshots (
+                equity, realized_pnl_today, unrealized_pnl, high_water_equity,
+                is_locked, lock_point, is_combine, timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                state.equity,
+                state.realized_pnl_today,
+                state.unrealized_pnl,
+                state.high_water_equity,
+                1 if state.is_locked else 0,
+                state.lock_point,
+                1 if state.is_combine else 0,
+                state.timestamp.isoformat(),
+            ),
+        )
+        await self._conn.commit()
+
+    async def record_session_start(
+        self, *, started_at: datetime, notes: str | None = None,
+    ) -> None:
+        """Insert a row marking session boundary (driver startup)."""
+        await self._conn.execute(
+            """
+            INSERT INTO sessions (started_at, timestamp, notes)
+            VALUES (?, ?, ?)
+            """,
+            (started_at.isoformat(), started_at.isoformat(), notes),
+        )
+        await self._conn.commit()
