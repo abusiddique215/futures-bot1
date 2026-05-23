@@ -1,10 +1,11 @@
 """TopstepRiskGate.on_tick + force_flatten + STRATEGY_DISABLED latch.
 
 Spec 04 §3.4 (state machine) + §3.5 (force-flatten triggers + idempotency).
+Tests are async to let pytest-asyncio manage the event loop (avoids the
+ResourceWarning that filterwarnings=error turns into a teardown failure).
 """
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 
 from bot.risk.combine_drawdown import CombineIntradayDrawdown
@@ -89,47 +90,46 @@ def test_on_tick_high_water_does_not_drop() -> None:
     gate = _gate()
     s = _state(equity=50_500, hw=51_000)
     s2 = gate.on_tick(s)
-    assert s2.high_water_equity == 51_000  # one-way ratchet
+    assert s2.high_water_equity == 51_000
 
 
-def test_on_tick_below_phantom_schedules_force_flatten() -> None:
+async def test_on_tick_below_phantom_schedules_force_flatten() -> None:
     """equity (47_500) < phantom (48_000 = hw - MLL) -> schedule flatten."""
     client = _TrackingClient()
     gate = _gate(client=client)
     gate.on_tick(_state(equity=47_500, hw=50_000, positions={"MNQ": 1}))
-    # Flatten is scheduled; need to drain.
-    asyncio.run(gate.force_flatten_now())
+    await gate.force_flatten_now()
     assert client.cancel_all_calls >= 1
     assert client.close_all_calls >= 1
 
 
-def test_on_tick_above_phantom_does_not_schedule_flatten() -> None:
+async def test_on_tick_above_phantom_does_not_schedule_flatten() -> None:
     client = _TrackingClient()
     gate = _gate(client=client)
     gate.on_tick(_state(equity=51_000, hw=51_000))
-    asyncio.run(gate.force_flatten_now())  # no-op
+    await gate.force_flatten_now()  # no-op
     assert client.cancel_all_calls == 0
 
 
 # ---- force_flatten idempotency + STRATEGY_DISABLED latch -------------------
 
-def test_force_flatten_idempotent_second_schedule_is_noop() -> None:
+async def test_force_flatten_idempotent_second_schedule_is_noop() -> None:
     """Two equity-touches in quick succession -> only one flatten executes."""
     client = _TrackingClient()
     gate = _gate(client=client)
     gate.on_tick(_state(equity=47_500, hw=50_000))
     gate.on_tick(_state(equity=47_000, hw=50_000))  # still below; redundant
-    asyncio.run(gate.force_flatten_now())
+    await gate.force_flatten_now()
     assert client.cancel_all_calls == 1
     assert client.close_all_calls == 1
 
 
-def test_strategy_disabled_after_force_flatten() -> None:
+async def test_strategy_disabled_after_force_flatten() -> None:
     """Subsequent approve_or_deny returns STRATEGY_DISABLED."""
     client = _TrackingClient()
     gate = _gate(client=client)
     gate.on_tick(_state(equity=47_500, hw=50_000))
-    asyncio.run(gate.force_flatten_now())
+    await gate.force_flatten_now()
 
     intent = OrderIntent(
         symbol="MNQ", side="BUY", quantity=1,
@@ -141,11 +141,11 @@ def test_strategy_disabled_after_force_flatten() -> None:
     assert result.rule == "STRATEGY_DISABLED"
 
 
-def test_explicit_force_flatten_disables_strategy() -> None:
+async def test_explicit_force_flatten_disables_strategy() -> None:
     """Direct call (e.g. 15:10 CT clock alert) also latches STRATEGY_DISABLED."""
     client = _TrackingClient()
     gate = _gate(client=client)
-    asyncio.run(gate.force_flatten_now("HARD_FLAT_TIME"))
+    await gate.force_flatten_now("HARD_FLAT_TIME")
     assert client.cancel_all_calls == 1
 
     intent = OrderIntent(
