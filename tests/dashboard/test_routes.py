@@ -48,11 +48,12 @@ def state(tmp_path: Path) -> DashboardState:
 
 
 async def test_root_returns_200_with_bot_names(state: DashboardState) -> None:
+    """Legacy v1 fleet page now lives under /v1/ — the SPA owns `/`."""
     app = create_app(state)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
     ) as client:
-        resp = await client.get("/")
+        resp = await client.get("/v1/")
     assert resp.status_code == 200
     assert "alpha" in resp.text
     assert "beta" in resp.text
@@ -64,7 +65,7 @@ async def test_root_includes_auto_refresh_meta(state: DashboardState) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
     ) as client:
-        resp = await client.get("/")
+        resp = await client.get("/v1/")
     assert "http-equiv" in resp.text.lower()
     assert "refresh" in resp.text.lower()
 
@@ -78,7 +79,7 @@ async def test_bot_detail_returns_200_for_existing_bot(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
     ) as client:
-        resp = await client.get("/bots/alpha")
+        resp = await client.get("/v1/bots/alpha")
     assert resp.status_code == 200
     assert "alpha" in resp.text
 
@@ -88,7 +89,7 @@ async def test_bot_detail_404_for_unknown_bot(state: DashboardState) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
     ) as client:
-        resp = await client.get("/bots/nonexistent")
+        resp = await client.get("/v1/bots/nonexistent")
     assert resp.status_code == 404
 
 
@@ -117,7 +118,7 @@ async def test_bot_detail_shows_recent_trades(
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
     ) as client:
-        resp = await client.get("/bots/alpha")
+        resp = await client.get("/v1/bots/alpha")
     assert resp.status_code == 200
     # The fill price should appear somewhere in the rendered HTML.
     assert "18055" in resp.text.replace(",", "") or "18055.5" in resp.text

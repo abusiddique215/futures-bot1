@@ -125,7 +125,9 @@ async def test_dashboard_sidecar_serves_fleet_page(tmp_path: Path) -> None:
             async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}") as client:
                 for _ in range(50):  # ~5s budget
                     try:
-                        resp = await client.get("/")
+                        # /healthz works regardless of whether the SPA
+                        # dist is present (and is the launchd probe path).
+                        resp = await client.get("/healthz")
                         if resp.status_code == 200:
                             return resp.status_code
                     except httpx.ConnectError:

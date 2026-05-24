@@ -322,3 +322,142 @@ async def test_get_active_profile_includes_username_default(
         resp = await client.get("/api/profiles")
     body = resp.json()
     assert body["active"] == "test_user"
+
+
+# ---------- T7 backend extensions: account_summary, flatten_all, prefs ------
+
+async def test_get_account_summary_aggregates_per_bot_journals(
+    state: DashboardState,
+) -> None:
+    """account_summary sums across per-bot journals — zero when none exist."""
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.get("/api/account_summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    # Both bots have empty journals → all rollups are zero.
+    for key in (
+        "balance", "equity", "open_pnl", "closed_pnl_today",
+        "high_water", "contracts_open",
+    ):
+        assert key in body
+    assert body["contracts_open"] == 0
+
+
+async def test_fleet_view_includes_strategy_id_and_active_profile(
+    state: DashboardState,
+) -> None:
+    """The fleet view exposes strategy_id per bot + the active profile."""
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.get("/api/fleet")
+    body = resp.json()
+    assert body["active_profile"] in ("test_user", "default")
+    for entry in body["bots"]:
+        assert entry["strategy_id"] == "orb_5m"
+
+
+async def test_flatten_all_503_when_no_gates_wired(
+    state: DashboardState,
+) -> None:
+    """Without gates the kill switch is unavailable — returns 503."""
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post("/api/bots/flatten_all")
+    assert resp.status_code == 503
+
+
+async def test_flatten_all_calls_force_flatten_on_each_gate(
+    state: DashboardState,
+) -> None:
+    """With gates wired, POST /api/bots/flatten_all hits force_flatten_now."""
+    called: list[str] = []
+
+    class _FakeGate:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def force_flatten_now(self, reason: str | None = None) -> None:
+            _ = reason
+            called.append(self.name)
+
+    # Replace gates on the state. Use object cast since DashboardState is
+    # frozen — build a new one for the test.
+    from dataclasses import replace
+    test_state = replace(
+        state,
+        gates={
+            "alpha": _FakeGate("alpha"),  # type: ignore[dict-item]
+            "beta": _FakeGate("beta"),    # type: ignore[dict-item]
+        },
+    )
+    app = create_app(test_state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post("/api/bots/flatten_all")
+    assert resp.status_code == 200
+    assert sorted(resp.json()["flattened"]) == ["alpha", "beta"]
+    assert sorted(called) == ["alpha", "beta"]
+
+
+async def test_prefs_round_trip(state: DashboardState) -> None:
+    """Read prefs (empty), write some, read them back."""
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        get_resp = await client.get("/api/profiles/test_user/prefs")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["prefs"] == {}
+
+        put_resp = await client.put(
+            "/api/profiles/test_user/prefs",
+            json={"prefs": {"theme": "dark", "refresh_rate_ms": 1000}},
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.json()["prefs"]["theme"] == "dark"
+
+        get2 = await client.get("/api/profiles/test_user/prefs")
+        assert get2.json()["prefs"]["refresh_rate_ms"] == 1000
+
+
+async def test_prefs_404_for_unknown_profile(state: DashboardState) -> None:
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.get("/api/profiles/nope/prefs")
+    assert resp.status_code == 404
+
+
+# ---------- SPA mount ------------------------------------------------------
+
+async def test_spa_root_serves_index_html(state: DashboardState) -> None:
+    """When the SPA dist exists, `/` returns the index containing #root."""
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.get("/")
+    assert resp.status_code == 200
+    assert 'id="root"' in resp.text
+
+
+async def test_spa_handles_client_side_routes(state: DashboardState) -> None:
+    """SPA client-side routes /bots/<name>, /profiles, /settings all return
+    the index so React Router can render them after hydration."""
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        for path in ("/bots/alpha", "/profiles", "/settings"):
+            resp = await client.get(path)
+            assert resp.status_code == 200, path
+            assert 'id="root"' in resp.text, path

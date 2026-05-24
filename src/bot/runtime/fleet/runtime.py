@@ -278,9 +278,13 @@ class FleetRuntime:
             broadcaster = WebSocketBroadcaster()
             self._telemetry.subscribe(broadcaster)
             bus_arg = self._telemetry
+        # Plan 23 T7: pass the per-bot risk gates through so the dashboard
+        # `POST /api/bots/flatten_all` can call force_flatten_now().
+        gates = {b.name: b.risk_gate for b in self._bots}
         state = DashboardState(
             bots_dir=bots_dir, heartbeat_path=self._heartbeat_path,
             bus=bus_arg, profile_store=profile_store, broadcaster=broadcaster,
+            gates=gates,
         )
         app = create_app(state)
         config = uvicorn.Config(

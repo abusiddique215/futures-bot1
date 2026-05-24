@@ -49,6 +49,7 @@ class FleetBotEntry(_Base):
     name: str
     enabled: bool
     symbol: str
+    strategy_id: str
     status: str  # "running" | "no_data"
 
 
@@ -56,6 +57,30 @@ class FleetView(_Base):
     bots: list[FleetBotEntry]
     heartbeat: datetime | None
     heartbeat_age: float | None
+    active_profile: str
+
+
+class AccountSummaryView(_Base):
+    """Fleet-wide aggregated account view (sum across all bots)."""
+    balance: float
+    equity: float
+    open_pnl: float
+    closed_pnl_today: float
+    high_water: float
+    contracts_open: int
+
+
+class FlattenResponse(_Base):
+    flattened: list[str]
+    failed: list[dict[str, str]]
+
+
+class PrefsBody(_Base):
+    prefs: dict[str, Any]
+
+
+class PrefsView(_Base):
+    prefs: dict[str, Any]
 
 
 class BotDetailView(_Base):
@@ -194,20 +219,91 @@ def build_router() -> APIRouter:
     async def get_fleet(request: Request) -> FleetView:
         ds = request.app.state.dashboard
         rows = list_bots(ds.bots_dir)
+        specs_by_name = {s.name: s for s in load_bot_specs(ds.bots_dir)}
         hb = get_fleet_heartbeat(ds.heartbeat_path)
         age = None
         if hb is not None and hb.tzinfo is not None:
             age = (datetime.now(UTC) - hb).total_seconds()
+        store = ds.profile_store
+        active = store.get_active() if store is not None else "default"
         return FleetView(
             bots=[
                 FleetBotEntry(
                     name=r.name, enabled=r.enabled, symbol=r.symbol,
+                    strategy_id=(
+                        specs_by_name[r.name].strategy_id
+                        if r.name in specs_by_name else "unknown"
+                    ),
                     status=r.status,
                 ) for r in rows
             ],
             heartbeat=hb,
             heartbeat_age=age,
+            active_profile=active,
         )
+
+    # ---- aggregated account ----
+
+    @router.get("/account_summary", response_model=AccountSummaryView)
+    async def get_account_summary(request: Request) -> AccountSummaryView:
+        """Sum per-bot journal snapshots into a single fleet view.
+
+        Each bot has its own journal + tracker so the "fleet account" is a
+        derived rollup. Bots with empty journals contribute zero. This is
+        the read the Overview header consumes; per-bot detail still hits
+        `/api/bots/{name}` for the unaggregated numbers.
+        """
+        ds = request.app.state.dashboard
+        rows = list_bots(ds.bots_dir)
+        balance = equity = high_water = closed_pnl = 0.0
+        open_pnl = 0.0  # unrealized — sourced from open positions
+        contracts_open = 0
+        for r in rows:
+            detail = get_bot_detail(r.name, r.journal_path)
+            balance += detail.equity - detail.realized_pnl_today
+            equity += detail.equity
+            high_water += detail.high_water_equity
+            closed_pnl += detail.realized_pnl_today
+            contracts_open += sum(
+                abs(q) for q in detail.open_positions.values()
+            )
+        return AccountSummaryView(
+            balance=balance,
+            equity=equity,
+            open_pnl=open_pnl,
+            closed_pnl_today=closed_pnl,
+            high_water=high_water,
+            contracts_open=contracts_open,
+        )
+
+    # ---- kill switch ----
+
+    @router.post("/bots/flatten_all", response_model=FlattenResponse)
+    async def flatten_all(request: Request) -> FlattenResponse:
+        """Force-flatten every bot in the fleet. Cancel-then-close per gate.
+
+        Disabled (returns 503) when no `gates` dict is wired into
+        DashboardState — happens in tests that don't construct a real
+        FleetRuntime + ResolvedBots.
+        """
+        ds = request.app.state.dashboard
+        gates = ds.gates or {}
+        if not gates:
+            raise HTTPException(
+                status_code=503,
+                detail="kill switch unavailable: no gates wired",
+            )
+        flattened: list[str] = []
+        failed: list[dict[str, str]] = []
+        for name, gate in gates.items():
+            try:
+                await gate.force_flatten_now(
+                    reason=f"dashboard kill switch by {getpass.getuser()}",
+                )
+                flattened.append(name)
+            except Exception as e:
+                failed.append({"bot": name, "error": str(e)})
+        return FlattenResponse(flattened=flattened, failed=failed)
 
     @router.get("/bots/{name}", response_model=BotDetailView)
     async def get_bot(name: str, request: Request) -> BotDetailView:
@@ -327,6 +423,25 @@ def build_router() -> APIRouter:
             bot=bot, block=block, key=body.key, value=body.value,
             spec=_spec_to_effective_view(new_spec),
         )
+
+    @router.get("/profiles/{name}/prefs", response_model=PrefsView)
+    async def get_prefs(name: str, request: Request) -> PrefsView:
+        store = _store(request)
+        try:
+            return PrefsView(prefs=store.get_prefs(name))
+        except ProfileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+
+    @router.put("/profiles/{name}/prefs", response_model=PrefsView)
+    async def put_prefs(
+        name: str, body: PrefsBody, request: Request,
+    ) -> PrefsView:
+        store = _store(request)
+        try:
+            store.set_prefs(name, body.prefs)
+        except ProfileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e)) from e
+        return PrefsView(prefs=store.get_prefs(name))
 
     @router.get("/profiles/{name}/history", response_model=HistoryView)
     async def get_history(name: str, request: Request) -> HistoryView:
