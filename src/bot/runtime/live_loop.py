@@ -31,6 +31,7 @@ from bot.backtest.tracker import AccountStateTracker
 from bot.journal.journal import Journal
 from bot.risk.gate import TopstepRiskGate
 from bot.runtime.bar_source import LiveBarSource
+from bot.runtime.fleet.schedule import AlwaysOn, Schedule
 from bot.runtime.heartbeat import Heartbeat
 from bot.types import ApprovedOrder
 
@@ -53,6 +54,7 @@ class LiveTradingLoop:
         telemetry: _Telemetry,
         heartbeat_path: Path,
         symbol: str,
+        schedule: Schedule | None = None,
     ) -> None:
         self._strategy = strategy
         self._gate = gate
@@ -62,6 +64,9 @@ class LiveTradingLoop:
         self._telemetry = telemetry
         self._heartbeat = Heartbeat(heartbeat_path)
         self._symbol = symbol
+        # Per-bot trading window. Defaults to AlwaysOn so single-bot callers
+        # see no behavior change.
+        self._schedule: Schedule = schedule if schedule is not None else AlwaysOn()
 
     async def run(
         self,
@@ -98,7 +103,18 @@ class LiveTradingLoop:
             # 4. State machine tick. May schedule flatten for NEXT iteration.
             state = self._gate.on_tick(state)
 
-            # 5-6. Pump intents through the gate.
+            # 5-6. Pump intents through the gate — but only while the
+            #     schedule says we're in a trading window. Mark-to-market,
+            #     equity snapshots, and heartbeat keep running regardless.
+            if not self._schedule.should_trade(bar.timestamp):
+                final_state = self._tracker.snapshot(timestamp=bar.timestamp)
+                await self._journal.record_equity_snapshot(final_state)
+                if self._heartbeat.should_write_at(bar.timestamp):
+                    self._heartbeat.write_now(bar.timestamp)
+                bars_seen += 1
+                if max_bars is not None and bars_seen >= max_bars:
+                    break
+                continue
             for intent in self._strategy.on_bar(bar, state):
                 decision = self._gate.approve_or_deny(intent, state)
                 if isinstance(decision, ApprovedOrder):
