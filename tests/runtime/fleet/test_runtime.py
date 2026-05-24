@@ -15,13 +15,17 @@ from bot.types import AccountState, Bar, OrderIntent
 
 
 def _make_spec(name: str) -> BotSpec:
+    # Plan 20: combine_intraday + always is now refused by LiveOnlyGuard.
+    # Switch the runtime-test fixture to market_hours so this file's focus —
+    # FleetRuntime concurrency + per-bot isolation — stays intact.
     return BotSpec(
         name=name, enabled=True, symbol="MNQ",
         strategy_id="orb_5m",
         strategy_params={"range_minutes": 5},
         risk_policy="combine_intraday",
         risk_params={"start_balance": 50_000, "mll_amount": 2_000, "max_mini": 5},
-        schedule_type="always", schedule_params={},
+        schedule_type="market_hours",
+        schedule_params={"open_ct": "08:30", "close_ct": "15:00"},
         journal_path=Path(f"state/journal_{name}.db"),  # unused; we override
     )
 
@@ -154,7 +158,8 @@ async def test_tracker_start_balance_from_risk_params(tmp_path: Path) -> None:
         strategy_id="orb_5m", strategy_params={},
         risk_policy="combine_intraday",
         risk_params={"start_balance": 100_000, "mll_amount": 3_000, "max_mini": 10},
-        schedule_type="always", schedule_params={},
+        schedule_type="market_hours",
+        schedule_params={"open_ct": "08:30", "close_ct": "15:00"},
         journal_path=tmp_path / "big.db",
     )
     resolved = reg.build(spec, broker=sim)

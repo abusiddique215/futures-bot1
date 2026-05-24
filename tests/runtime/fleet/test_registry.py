@@ -10,6 +10,7 @@ import pytest
 from bot.backtest.sim_client import SimExecutionClient
 from bot.risk.efa_drawdown import EFAConsistencyDrawdown, EFAStandardEoDDrawdown
 from bot.risk.gate import TopstepRiskGate
+from bot.runtime.fleet.live_only_guard import IncompatibleBotSpecError
 from bot.runtime.fleet.registry import BotRegistry, ResolvedBot
 from bot.runtime.fleet.schedule import AlwaysOn, CustomWindows, MarketHours
 from bot.runtime.fleet.spec import BotSpec
@@ -23,10 +24,13 @@ def _spec(
     strategy_params: dict[str, Any] | None = None,
     risk_policy: str = "combine_intraday",
     risk_params: dict[str, Any] | None = None,
-    schedule_type: str = "always",
+    schedule_type: str = "market_hours",
     schedule_params: dict[str, Any] | None = None,
     name: str = "alpha",
 ) -> BotSpec:
+    # Default schedule is market_hours (not always) so the LiveOnlyGuard
+    # added in Plan 20 doesn't reject specs using only the Combine-policy
+    # default. Tests exercising the always schedule pass it explicitly.
     return BotSpec(
         name=name,
         enabled=True,
@@ -36,7 +40,8 @@ def _spec(
         risk_policy=risk_policy,  # type: ignore[arg-type]
         risk_params=risk_params or {"start_balance": 50_000, "mll_amount": 2_000, "max_mini": 5},
         schedule_type=schedule_type,  # type: ignore[arg-type]
-        schedule_params=schedule_params or {},
+        schedule_params=schedule_params if schedule_params is not None
+        else ({"open_ct": "08:30", "close_ct": "15:00"} if schedule_type == "market_hours" else {}),
         journal_path=Path(f"state/journal_{name}.db"),
     )
 
@@ -45,17 +50,51 @@ def _broker() -> Any:
     return SimExecutionClient()
 
 
-def test_builtin_orb_combine_always_resolves() -> None:
+def test_builtin_orb_combine_market_hours_resolves() -> None:
+    """Combine + market_hours is the legal SurgeBot-style pairing.
+
+    Plan 20: `combine_intraday` + `always` is now refused by LiveOnlyGuard;
+    this test was previously `..._combine_always_resolves` and has been
+    rewritten to use `market_hours` so the regression coverage for ORB +
+    Combine wiring still runs without tripping the guard.
+    """
     reg = BotRegistry()
-    spec = _spec()
+    spec = _spec(
+        schedule_type="market_hours",
+        schedule_params={"open_ct": "08:30", "close_ct": "15:00"},
+    )
     resolved = reg.build(spec, broker=_broker())
     assert isinstance(resolved, ResolvedBot)
     assert resolved.name == "alpha"
     assert isinstance(resolved.strategy, OpeningRangeBreakoutStrategy)
     assert isinstance(resolved.risk_gate, TopstepRiskGate)
-    assert isinstance(resolved.schedule, AlwaysOn)
+    assert isinstance(resolved.schedule, MarketHours)
     assert resolved.journal_path == Path("state/journal_alpha.db")
     assert resolved.spec is spec
+
+
+def test_orb_efa_standard_always_resolves() -> None:
+    """AlwaysOn is legal with EFA Standard (the NQ Maintenance pairing)."""
+    reg = BotRegistry()
+    spec = _spec(
+        risk_policy="efa_standard",
+        risk_params={"mll_amount": 2_000},
+        schedule_type="always",
+    )
+    resolved = reg.build(spec, broker=_broker())
+    assert isinstance(resolved.schedule, AlwaysOn)
+
+
+def test_combine_intraday_plus_always_raises_incompatible() -> None:
+    """LiveOnlyGuard runs before component construction — boot-time refusal."""
+    reg = BotRegistry()
+    spec = _spec(
+        risk_policy="combine_intraday",
+        schedule_type="always",
+        schedule_params={},
+    )
+    with pytest.raises(IncompatibleBotSpecError, match="15:10 CT"):
+        reg.build(spec, broker=_broker())
 
 
 def test_market_hours_schedule_resolves() -> None:

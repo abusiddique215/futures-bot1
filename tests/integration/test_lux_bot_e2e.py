@@ -91,10 +91,8 @@ def _build_lux(
         symbol="MNQ",
         strategy_id="signal_strategy",
         strategy_params={"max_signals_per_bar": 1},
-        risk_policy="combine_intraday",
-        risk_params={
-            "start_balance": 50_000, "mll_amount": 2_000, "max_mini": 5,
-        },
+        risk_policy="efa_standard",
+        risk_params={"mll_amount": 2_000},
         schedule_type="always",
         schedule_params={},
         journal_path=tmp_path / "lux_e2e.db",
