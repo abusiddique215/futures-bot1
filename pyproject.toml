@@ -83,6 +83,13 @@ ignore_missing_imports = true
 module = ["bot.data.firstratedata", "bot.data.continuous"]
 disable_error_code = ["no-untyped-call"]
 
+# matplotlib's bundled type stubs accept only float/Sequence inputs for plot(),
+# but Axes.plot() accepts datetime sequences at runtime (mpl auto-converts).
+# Disable arg-type only in the proof renderer; the rest of src/ stays strict.
+[[tool.mypy.overrides]]
+module = ["bot.proof.render"]
+disable_error_code = ["arg-type"]
+
 # Tests are explicit code; we don't enforce strict typing inside them so that
 # pytest fixture parameters can be written `(utc_now)` instead of
 # `(utc_now: datetime)` for every test. src/ stays strict.
