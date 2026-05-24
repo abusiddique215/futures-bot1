@@ -20,16 +20,29 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
-from bot.data.contract_calendar import parse_contract_code
+from bot.data.contract_calendar import CONTRACT_MONTHS, parse_contract_code
+from bot.markets.registry import MARKETS
 from bot.types import Bar
 
-_FILENAME_RE = re.compile(r"^(?P<symbol>NQ|MNQ)_(?P<contract>\d{4}[HMUZ])_(?P<interval>1min)\.csv$")
+# Plan 14: regex accepts every market in `bot.markets.registry.MARKETS`. The
+# 3-char roots (MNQ, MES, MGC) MUST precede the 2-char roots (NQ, ES, GC) in
+# the alternation, otherwise "MNQ_..." matches as "NQ" with a leftover "M"
+# that breaks the contract group. The month codes likewise come from the
+# registry-driven CONTRACT_MONTHS (union of equity-index quarterly + gold
+# even-month cycles).
+_ROOTS_FOR_REGEX: list[str] = sorted(MARKETS.keys(), key=len, reverse=True)
+_MONTH_CODES_FOR_REGEX: str = "".join(sorted(CONTRACT_MONTHS.keys()))
+_FILENAME_RE = re.compile(
+    rf"^(?P<symbol>{'|'.join(_ROOTS_FOR_REGEX)})_"
+    rf"(?P<contract>\d{{4}}[{_MONTH_CODES_FOR_REGEX}])_"
+    r"(?P<interval>1min)\.csv$"
+)
 
 
 @dataclass(frozen=True)
 class FirstRateDataFilename:
     """Parsed FirstRateData filename."""
-    symbol: str          # "NQ" | "MNQ"
+    symbol: str          # registry root, e.g. "NQ" | "MNQ" | "GC" | "MGC" | ...
     contract: str        # "2023Z"
     interval: str        # "1min" (v1 only supports 1-min input)
 
@@ -46,7 +59,7 @@ def parse_firstratedata_filename(path: Path | str) -> FirstRateDataFilename:
     if not match:
         raise ValueError(
             f"Filename {name!r} does not match FirstRateData convention "
-            f"<NQ|MNQ>_<YYYY><HMUZ>_1min.csv"
+            f"<{'|'.join(_ROOTS_FOR_REGEX)}>_<YYYY><{_MONTH_CODES_FOR_REGEX}>_1min.csv"
         )
     contract = match.group("contract")
     parse_contract_code(contract)  # raises ValueError on bad month code
