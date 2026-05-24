@@ -28,6 +28,8 @@ dependencies = [
     # Plan 13 deps (proof-surface bundle: equity-curve PNG + HTML report)
     "matplotlib>=3.8",                # equity-curve PNG (Agg backend, headless)
     "jinja2>=3.1",                    # HTML report template rendering
+    # Plan 19 deps (Lux Bot — Discord signal ingestion)
+    "discord.py>=2.4,<3.0",           # canonical async Discord client (mock-able for tests)
 ]
 
 [project.optional-dependencies]

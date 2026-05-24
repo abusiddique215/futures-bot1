@@ -12,6 +12,7 @@ from the spec.
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import time
@@ -29,9 +30,11 @@ from bot.risk.gate import TopstepRiskGate
 from bot.risk.policies import DrawdownPolicy
 from bot.runtime.fleet.schedule import AlwaysOn, CustomWindows, MarketHours, Schedule
 from bot.runtime.fleet.spec import BotSpec
+from bot.signals.source import SignalSource
 from bot.strategy.mean_reversion import MeanReversionStrategy
 from bot.strategy.orb import OpeningRangeBreakoutStrategy, ORBProfile
 from bot.strategy.profiles.propbot import PROPBOT_DEFAULTS
+from bot.strategy.signal_strategy import SignalStrategy
 from bot.strategy.tiered_sizing import TieredSizingDecorator
 from bot.strategy.trend_following import TrendFollowingStrategy
 
@@ -105,6 +108,88 @@ def _build_orb_5m_tiered(params: dict[str, Any]) -> Strategy:
     return TieredSizingDecorator(inner=inner, **tiered)
 
 
+# Synthetic params key injected by BotRegistry.build() so the
+# signal_strategy factory knows the bot's contract symbol (spec.symbol).
+# Strategies whose params already carry a symbol (ORB) ignore it; the
+# signal_strategy reads it here.
+_BOT_SYMBOL_KEY = "_bot_symbol"
+
+
+def _build_signal_source(params: dict[str, Any], symbol: str) -> SignalSource:
+    """Build a SignalSource from env-driven config.
+
+    Resolution order:
+      1. LUX_BOT_FIXTURE_PATH set → FixtureSignalSource (JSON replay)
+      2. DISCORD_BOT_TOKEN set + discord_channel_ids in params →
+         DiscordSignalSource (production)
+      3. Neither → RuntimeError (loud, not silent — the bot is opt-in)
+
+    The split keeps the registry side-effect-free: no Discord network
+    connection is opened at build time; that happens later when the
+    strategy's pump task calls source.iter_signals().
+    """
+    import json
+    from datetime import datetime
+    from pathlib import Path
+
+    from bot.signals.fixture_source import FixtureSignalSource
+    from bot.signals.source import SignalEvent
+
+    fixture_path = os.environ.get("LUX_BOT_FIXTURE_PATH")
+    if fixture_path:
+        raw_events = json.loads(Path(fixture_path).read_text(encoding="utf-8"))
+        events = [
+            SignalEvent(
+                received_at=datetime.fromisoformat(r["received_at"]),
+                symbol=r["symbol"], side=r["side"], qty=int(r["qty"]),
+                limit_price=r.get("limit_price"),
+                stop_loss=r.get("stop_loss"),
+                take_profit=r.get("take_profit"),
+                raw_text=r.get("raw_text", ""),
+                source_id=r.get("source_id", ""),
+            )
+            for r in raw_events
+        ]
+        return FixtureSignalSource(events)
+
+    token = os.environ.get("DISCORD_BOT_TOKEN")
+    if token:
+        from bot.signals.discord_source import DiscordSignalSource
+
+        channel_ids = list(params.get("discord_channel_ids", []))
+        default_symbol = str(params.get("default_symbol", symbol))
+        return DiscordSignalSource(
+            token=token,
+            channel_ids=[int(c) for c in channel_ids],
+            default_symbol=default_symbol,
+        )
+
+    raise RuntimeError(
+        "signal_strategy requires LUX_BOT_FIXTURE_PATH (replay) or "
+        "DISCORD_BOT_TOKEN (production). Neither was set.",
+    )
+
+
+def _build_signal_strategy(params: dict[str, Any]) -> Strategy:
+    """Factory for the `signal_strategy` registry id.
+
+    The bot's symbol is injected into params under `_BOT_SYMBOL_KEY` by
+    `BotRegistry.build` — see the comment on that constant.
+    """
+    symbol = str(params.get(_BOT_SYMBOL_KEY))
+    if not symbol or symbol == "None":
+        raise KeyError(
+            f"signal_strategy requires {_BOT_SYMBOL_KEY!r} in params "
+            "(normally injected by BotRegistry.build).",
+        )
+    source = _build_signal_source(params, symbol)
+    return SignalStrategy(
+        symbol=symbol,
+        source=source,
+        max_signals_per_bar=int(params.get("max_signals_per_bar", 1)),
+    )
+
+
 def _build_market_hours(params: dict[str, Any]) -> Schedule:
     open_ct = _parse_time(params.get("open_ct", time(8, 30)))
     close_ct = _parse_time(params.get("close_ct", time(15, 10)))
@@ -139,6 +224,7 @@ class BotRegistry:
         self.register_strategy("orb_5m_tiered", _build_orb_5m_tiered)
         self.register_strategy("trend_ema_pullback", _build_trend_ema_pullback)
         self.register_strategy("mean_reversion_bb", _build_mean_reversion)
+        self.register_strategy("signal_strategy", _build_signal_strategy)
         self.register_risk_policy(
             "combine_intraday",
             lambda p: CombineIntradayDrawdown(**p),
@@ -173,7 +259,19 @@ class BotRegistry:
         if spec.schedule_type not in self._schedules:
             raise KeyError(f"unknown schedule_type: {spec.schedule_type!r}")
 
-        strategy = self._strategies[spec.strategy_id](spec.strategy_params)
+        # signal_strategy needs the bot's contract symbol but the registry
+        # API only forwards strategy_params. Inject the symbol via a
+        # synthetic params key for this id only — other factories see their
+        # params unchanged. Keeps the registration API at (params)->Strategy
+        # without leaking spec details into every factory.
+        if spec.strategy_id == "signal_strategy":
+            strategy_params = {
+                **spec.strategy_params,
+                _BOT_SYMBOL_KEY: spec.symbol,
+            }
+        else:
+            strategy_params = dict(spec.strategy_params)
+        strategy = self._strategies[spec.strategy_id](strategy_params)
         policy = self._policies[spec.risk_policy](spec.risk_params)
         schedule = self._schedules[spec.schedule_type](spec.schedule_params)
         gate = TopstepRiskGate(
