@@ -29,6 +29,7 @@ from bot.risk.gate import TopstepRiskGate
 from bot.risk.policies import DrawdownPolicy
 from bot.runtime.fleet.schedule import AlwaysOn, CustomWindows, MarketHours, Schedule
 from bot.runtime.fleet.spec import BotSpec
+from bot.strategy.mean_reversion import MeanReversionStrategy
 from bot.strategy.orb import OpeningRangeBreakoutStrategy, ORBProfile
 
 _CT: Final[ZoneInfo] = ZoneInfo("America/Chicago")
@@ -71,6 +72,12 @@ def _build_orb(params: dict[str, Any]) -> Strategy:
     return OpeningRangeBreakoutStrategy(ORBProfile.model_validate(params))
 
 
+def _build_mean_reversion(params: dict[str, Any]) -> Strategy:
+    # MeanReversionStrategy takes kwargs directly — no Pydantic profile.
+    # ConfigError-shaped TypeErrors here surface a bad strategy_params block.
+    return MeanReversionStrategy(**params)
+
+
 def _build_market_hours(params: dict[str, Any]) -> Schedule:
     open_ct = _parse_time(params.get("open_ct", time(8, 30)))
     close_ct = _parse_time(params.get("close_ct", time(15, 10)))
@@ -102,6 +109,7 @@ class BotRegistry:
 
     def _register_builtins(self) -> None:
         self.register_strategy("orb_5m", _build_orb)
+        self.register_strategy("mean_reversion_bb", _build_mean_reversion)
         self.register_risk_policy(
             "combine_intraday",
             lambda p: CombineIntradayDrawdown(**p),
