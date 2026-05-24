@@ -1,0 +1,22 @@
+# Lux Bot — third NQ bot, distinct from SurgeBot + PropBot because its
+# signal source is an external Discord channel rather than internal
+# indicator logic. Disabled by default — requires either:
+#   - DISCORD_BOT_TOKEN env var + discord_channel_ids populated below, OR
+#   - LUX_BOT_FIXTURE_PATH env var pointing at a JSON file of SignalEvents
+#     (smoke / replay mode)
+name: lux_bot
+enabled: false
+symbol: MNQH26
+strategy_id: signal_strategy
+strategy_params:
+  # Source selection happens at registry-build time via env vars; the
+  # discord_channel_ids list is consumed only when DISCORD_BOT_TOKEN is set.
+  discord_channel_ids: []
+  default_symbol: MNQH26
+  max_signals_per_bar: 1
+risk_policy: efa_standard
+risk_params:
+  mll_amount: 2000
+schedule_type: always   # Discord posts can arrive any time
+schedule_params: {}
+journal_path: state/journal_lux_bot.db
