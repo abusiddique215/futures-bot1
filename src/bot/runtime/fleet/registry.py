@@ -145,6 +145,7 @@ class BotRegistry:
             execution_client=broker,
             telemetry=NoopTelemetryBus(),
             config=RiskConfig(env="backtest", accounts_managed=1),
+            symbol=spec.symbol,
         )
         return ResolvedBot(
             name=spec.name,

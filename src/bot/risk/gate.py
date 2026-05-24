@@ -79,6 +79,7 @@ class TopstepRiskGate:
         config: RiskConfig,
         telemetry: _Telemetry | None = None,
         journal_provider: JournalProvider | None = None,
+        symbol: str = "MNQ",
     ) -> None:
         assert config.accounts_managed == 1, (
             "Multi-account orchestration is out of scope for v1. "
@@ -94,6 +95,7 @@ class TopstepRiskGate:
         self.policy = policy
         self.news_calendar = news_calendar
         self.execution_client = execution_client
+        self.symbol = symbol
         # Plan 7 T9: default to a no-op bus so tests don't have to provide one.
         # Canonical wiring passes a bot.observability.bus.TelemetryBus.
         self.telemetry: _Telemetry = telemetry if telemetry is not None else NoopTelemetryBus()
@@ -386,7 +388,7 @@ class TopstepRiskGate:
             return
         flatten_reason = self._pending_flatten_reason
         try:
-            await self.execution_client.cancel_all(symbol="MNQ")
+            await self.execution_client.cancel_all(symbol=self.symbol)
             close_all = getattr(self.execution_client, "close_all_positions", None)
             if close_all is not None:
                 await close_all()
