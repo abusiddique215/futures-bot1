@@ -12,7 +12,7 @@ Spec: 04-risk-engine.md §3.3 lines 215-225.
 """
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 from bot.types import AccountState
 
@@ -24,6 +24,12 @@ class DrawdownPolicy(Protocol):
     All methods are pure functions on AccountState. State updates return a new
     AccountState; never mutate. See spec 04 §3.4 transition diagram.
     """
+
+    # Plan 22 T1: whether this policy enforces the Topstep Combine 15:10 CT
+    # hard-flat. Combine accounts MUST flatten by 15:10; EFA / funded accounts
+    # have no daily hard-flat (only EoD-trailing MLL). Declared `ClassVar` so
+    # implementers can satisfy it as a class-level attribute.
+    enforces_hard_flat: ClassVar[bool]
 
     def phantom_mll(self, state: AccountState) -> float:
         """Equity floor below which the account is dead. Used by rule 3."""

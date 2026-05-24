@@ -184,7 +184,14 @@ class TopstepRiskGate:
     def _check_hard_flat(
         self, intent: OrderIntent, state: AccountState,
     ) -> OrderDenied | None:
-        """Rule 1: hard-flat clock check. Spec 04 §3.2."""
+        """Rule 1: hard-flat clock check. Spec 04 §3.2.
+
+        Plan 22 T1: only policies whose `enforces_hard_flat` attribute is True
+        (Combine) gate open-increasing intents past 15:00/15:10 CT. EFA / funded
+        policies skip the clock check entirely — they have no daily hard-flat.
+        """
+        if not self.policy.enforces_hard_flat:
+            return None
         from datetime import time
         from zoneinfo import ZoneInfo
 

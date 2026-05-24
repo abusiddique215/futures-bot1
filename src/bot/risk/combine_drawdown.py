@@ -9,6 +9,7 @@ start_balance. After lock, the floor never moves regardless of equity.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import ClassVar
 
 from bot.markets.registry import get_market, is_micro
 from bot.types import AccountState
@@ -16,6 +17,11 @@ from bot.types import AccountState
 
 class CombineIntradayDrawdown:
     """$50K/$100K/$150K Combine drawdown policy (real-time on unrealized)."""
+
+    # Plan 22 T1: Combine accounts MUST flatten by 15:10 CT. The risk gate's
+    # hard-flat clock check consults this attribute to decide whether to
+    # enforce HARD_FLAT_CLOCK / HARD_FLAT_PREEMPT.
+    enforces_hard_flat: ClassVar[bool] = True
 
     def __init__(self, start_balance: float, mll_amount: float, max_mini: int) -> None:
         self._start_balance = start_balance

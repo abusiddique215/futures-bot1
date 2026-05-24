@@ -20,6 +20,7 @@ the driver is responsible for snapshotting AccountState at session boundary.
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import ClassVar
 
 from bot.markets.registry import get_market, is_micro
 from bot.types import AccountState
@@ -27,6 +28,12 @@ from bot.types import AccountState
 
 class EFAStandardEoDDrawdown:
     """EFA Standard: EoD-trailing floor; profit-gated scaling plan."""
+
+    # Plan 22 T1: EFA / funded accounts do NOT have a daily hard-flat — only
+    # the EoD-trailing MLL. 24/7 bots (NQ Maintenance) need to trade through
+    # the 15:10-17:00 CT window that Combine accounts must close. The risk
+    # gate skips HARD_FLAT_CLOCK / HARD_FLAT_PREEMPT when this is False.
+    enforces_hard_flat: ClassVar[bool] = False
 
     def __init__(self, mll_amount: float) -> None:
         self._mll_amount = mll_amount
@@ -81,6 +88,11 @@ class EFAStandardEoDDrawdown:
 
 class EFAConsistencyDrawdown(EFAStandardEoDDrawdown):
     """EFA Consistency: same per-trade rules + payout-window 40% cap."""
+
+    # Plan 22 T1: same as the parent — EFA accounts (Standard or Consistency)
+    # never enforce the 15:10 CT hard-flat. Restated here explicitly so a
+    # future maintainer can read this class in isolation.
+    enforces_hard_flat: ClassVar[bool] = False
 
     CONSISTENCY_THRESHOLD: float = 0.40
 
