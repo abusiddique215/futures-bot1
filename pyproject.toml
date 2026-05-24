@@ -25,6 +25,9 @@ dependencies = [
     "project-x-py>=3.5.9,<4.0",       # TopstepX REST + SignalR (module name: project_x_py)
     # Plan 9 deps (Mac deploy / runtime)
     "python-dotenv>=1.0",             # .env file loading for load_secrets()
+    # Plan 13 deps (proof-surface bundle: equity-curve PNG + HTML report)
+    "matplotlib>=3.8",                # equity-curve PNG (Agg backend, headless)
+    "jinja2>=3.1",                    # HTML report template rendering
 ]
 
 [project.optional-dependencies]
