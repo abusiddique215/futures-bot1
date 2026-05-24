@@ -63,6 +63,10 @@ class _ClientState:
         self.queue: asyncio.Queue[str] = asyncio.Queue(maxsize=max_queue)
         self.drain_task: asyncio.Task[None] | None = None
         self.dropped = False
+        # Channel filter: None = receive everything. Otherwise the set of
+        # subscribed channels — events whose channels intersect with this
+        # set are delivered. Channels: "fleet" (everything) and "bot:<name>".
+        self.channels: set[str] | None = None
 
 
 class WebSocketBroadcaster:
@@ -94,9 +98,16 @@ class WebSocketBroadcaster:
         if not self._clients:
             return
         payload = _serialize(kind, kw)
+        event_channels = _channels_for_event(kind, kw)
         # Snapshot client list so a concurrent unregister can't perturb us.
         for state in list(self._clients.values()):
             if state.dropped:
+                continue
+            # Channel filter — if the client has subscribed to specific
+            # channels, only deliver events that overlap.
+            if state.channels is not None and not (
+                state.channels & event_channels
+            ):
                 continue
             try:
                 state.queue.put_nowait(payload)
@@ -110,6 +121,13 @@ class WebSocketBroadcaster:
         # already on the queue. The yield is bounded by the number of fast
         # clients; slow clients block only their own drain task, not ours.
         await asyncio.sleep(0)
+
+    def subscribe(self, ws: WebSocketLike, channels: list[str]) -> None:
+        """Replace a client's channel filter. Empty list ⇒ receive nothing."""
+        state = self._clients.get(id(ws))
+        if state is None:
+            return
+        state.channels = set(channels)
 
     # ---- public API ----
 
@@ -187,6 +205,21 @@ class WebSocketBroadcaster:
 
 
 # ---- helpers ---------------------------------------------------------------
+
+def _channels_for_event(kind: str, kw: dict[str, Any]) -> set[str]:
+    """Channels this event belongs to.
+
+    Every event lands on "fleet" (the catch-all). Events with a `bot` key
+    additionally land on `bot:<name>`. New event kinds with different
+    routing can extend this map.
+    """
+    _ = kind  # all kinds are fleet-wide for now
+    channels: set[str] = {"fleet"}
+    bot = kw.get("bot")
+    if isinstance(bot, str):
+        channels.add(f"bot:{bot}")
+    return channels
+
 
 def _serialize(kind: str, kw: dict[str, Any]) -> str:
     """Build the JSON envelope `{kind, data}` once, reused per client."""

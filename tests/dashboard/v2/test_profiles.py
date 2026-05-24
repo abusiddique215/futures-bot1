@@ -52,21 +52,21 @@ def _spec(name: str = "alpha") -> BotSpec:
 # ---------- ProfileStore ----------------------------------------------------
 
 def test_default_profile_auto_created_on_first_access(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     assert store.list_profiles() == ["default"]
     overrides = store.get_overrides("default")
     assert overrides == {}
 
 
 def test_create_fork_from_default(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     store.create("alice")
     assert sorted(store.list_profiles()) == ["alice", "default"]
     assert store.get_overrides("alice") == {}
 
 
 def test_create_fork_carries_overrides(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     store.set_override(
         "default", bot="alpha", block="strategy_params",
         key="range_minutes", value=10, user="tester",
@@ -77,33 +77,33 @@ def test_create_fork_carries_overrides(tmp_path: Path) -> None:
 
 
 def test_create_duplicate_raises(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     store.create("alice")
     with pytest.raises(FileExistsError):
         store.create("alice")
 
 
 def test_create_unknown_fork_source_raises(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     with pytest.raises(ProfileNotFoundError):
         store.create("alice", fork_from="ghost")
 
 
 def test_delete_profile_removes_dir(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     store.create("alice")
     store.delete("alice")
     assert "alice" not in store.list_profiles()
 
 
 def test_delete_default_refused(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     with pytest.raises(ValueError, match="default"):
         store.delete("default")
 
 
 def test_set_and_get_override_roundtrip(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     store.set_override(
         "default", bot="alpha", block="strategy_params",
         key="range_minutes", value=10, user="tester",
@@ -113,7 +113,7 @@ def test_set_and_get_override_roundtrip(tmp_path: Path) -> None:
 
 
 def test_set_override_appends_history(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     store.set_override(
         "default", bot="alpha", block="risk_params",
         key="mll_amount", value=2500.0, user="alice",
@@ -131,7 +131,7 @@ def test_set_override_appends_history(tmp_path: Path) -> None:
 
 
 def test_set_override_records_before_after_on_change(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     store.set_override(
         "default", "alpha", "strategy_params", "range_minutes", 5, user="alice",
     )
@@ -145,7 +145,7 @@ def test_set_override_records_before_after_on_change(tmp_path: Path) -> None:
 
 
 def test_overrides_isolated_across_profiles(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     store.create("alice")
     store.set_override(
         "alice", "alpha", "strategy_params", "range_minutes", 15, user="alice",
@@ -157,20 +157,20 @@ def test_overrides_isolated_across_profiles(tmp_path: Path) -> None:
 
 
 def test_get_prefs_default(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     prefs = store.get_prefs("default")
     assert isinstance(prefs, dict)
 
 
 def test_set_prefs_roundtrip(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     store.set_prefs("default", {"theme": "dark", "refresh_seconds": 2})
     assert store.get_prefs("default") == {"theme": "dark", "refresh_seconds": 2}
 
 
 def test_concurrent_writes_do_not_corrupt(tmp_path: Path) -> None:
     """Two threads write different keys; both end up in the YAML."""
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
 
     def writer(key: str, value: int) -> None:
         store.set_override(
@@ -192,7 +192,7 @@ def test_concurrent_writes_do_not_corrupt(tmp_path: Path) -> None:
 
 
 def test_history_uses_jsonl_one_per_line(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     store.set_override("default", "a", "strategy_params", "x", 1, user="t")
     store.set_override("default", "a", "strategy_params", "y", 2, user="t")
     raw = (tmp_path / "default" / "history.jsonl").read_text(encoding="utf-8")
@@ -203,13 +203,13 @@ def test_history_uses_jsonl_one_per_line(tmp_path: Path) -> None:
 
 
 def test_get_history_for_unknown_profile_raises(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     with pytest.raises(ProfileNotFoundError):
         store.get_history("ghost")
 
 
 def test_set_override_for_unknown_profile_raises(tmp_path: Path) -> None:
-    store = ProfileStore(tmp_path)
+    store = ProfileStore(tmp_path, current_user="default")
     with pytest.raises(ProfileNotFoundError):
         store.set_override("ghost", "a", "strategy_params", "x", 1, user="t")
 

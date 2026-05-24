@@ -26,8 +26,10 @@ ProfileOverlay:
 from __future__ import annotations
 
 import fcntl
+import getpass
 import hashlib
 import json
+import re
 import shutil
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -38,6 +40,17 @@ import yaml
 
 from bot.runtime.fleet.registry import BotRegistry
 from bot.runtime.fleet.spec import BotSpec
+
+# Profile names map to directories — restrict to filesystem-safe identifiers.
+_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _sanitize(name: str) -> str:
+    """Replace invalid characters with '_' so e.g. a macOS short name like
+    'abu.siddique' works directly and weirder cases still produce a usable
+    profile dir."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+    return safe[:64] or "user"
 
 _VALID_BLOCKS = frozenset({"strategy_params", "risk_params", "schedule_params"})
 
@@ -60,13 +73,38 @@ class ProfileStore:
         The "default" profile is auto-created on first construction.
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, current_user: str | None = None) -> None:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
         # Auto-create default so every operation has a baseline.
         default_dir = self._root / "default"
         if not default_dir.exists():
             self._init_profile_dir(default_dir)
+        # Auto-create the per-user default profile too. macOS short names
+        # frequently contain "." (e.g. abu.siddique) which is filesystem-safe.
+        self._current_user = _sanitize(
+            current_user if current_user is not None else getpass.getuser(),
+        )
+        user_dir = self._root / self._current_user
+        if self._current_user != "default" and not user_dir.exists():
+            self._init_profile_dir(user_dir)
+
+    @property
+    def current_user(self) -> str:
+        return self._current_user
+
+    def get_active(self) -> str:
+        """Active profile name. Defaults to current_user when no marker exists."""
+        marker = self._root / ".active"
+        if marker.exists():
+            name = marker.read_text(encoding="utf-8").strip()
+            if name and (self._root / name).exists():
+                return name
+        return self._current_user
+
+    def set_active(self, name: str) -> None:
+        self._require(name)
+        (self._root / ".active").write_text(name, encoding="utf-8")
 
     # ---- lifecycle ----
 
@@ -80,8 +118,12 @@ class ProfileStore:
         """Create a new profile, copying overrides + prefs from `fork_from`.
 
         Raises FileExistsError if `name` already exists, ProfileNotFoundError
-        if `fork_from` doesn't exist.
+        if `fork_from` doesn't exist, ValueError on a name with invalid chars.
         """
+        if not _NAME_RE.match(name):
+            raise ValueError(
+                f"invalid profile name {name!r}: must match {_NAME_RE.pattern}",
+            )
         target = self._root / name
         if target.exists():
             raise FileExistsError(f"profile already exists: {name!r}")
