@@ -27,6 +27,7 @@ from bot.risk.config import RiskConfig
 from bot.risk.efa_drawdown import EFAConsistencyDrawdown, EFAStandardEoDDrawdown
 from bot.risk.gate import TopstepRiskGate
 from bot.risk.policies import DrawdownPolicy
+from bot.runtime.fleet.live_only_guard import validate_schedule_x_policy
 from bot.runtime.fleet.schedule import AlwaysOn, CustomWindows, MarketHours, Schedule
 from bot.runtime.fleet.spec import BotSpec
 from bot.strategy.mean_reversion import MeanReversionStrategy
@@ -172,6 +173,11 @@ class BotRegistry:
             raise KeyError(f"unknown risk_policy: {spec.risk_policy!r}")
         if spec.schedule_type not in self._schedules:
             raise KeyError(f"unknown schedule_type: {spec.schedule_type!r}")
+
+        # Plan 20: reject 24/7 schedules on Combine accounts at boot time.
+        # Runs after the registration checks so users see "unknown strategy_id"
+        # before "incompatible schedule x policy" if both apply.
+        validate_schedule_x_policy(spec.schedule_type, spec.risk_policy)
 
         strategy = self._strategies[spec.strategy_id](spec.strategy_params)
         policy = self._policies[spec.risk_policy](spec.risk_params)

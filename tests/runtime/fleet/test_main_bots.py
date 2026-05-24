@@ -23,8 +23,10 @@ risk_params:
   start_balance: 50000
   mll_amount: 2000
   max_mini: 5
-schedule_type: always
-schedule_params: {{}}
+schedule_type: market_hours
+schedule_params:
+  open_ct: "08:30"
+  close_ct: "15:00"
 journal_path: {jpath}
 """
 
