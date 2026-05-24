@@ -500,6 +500,19 @@ Parameterized across `[sim, ib_paper, topstepx_practice]`. Default CI runs `sim`
 - Wrong API key → 401 persistently → adapter raises `BrokerAuthError` (no infinite retry loop).
 - IB Gateway not running → `IBGatewayNotRunningError` with operator-actionable message.
 
+### 5.6 Test ladder — the four rails
+
+Plan 11 added a fourth rail, **TopstepX Sim**, between IB Paper and live TopstepX. The full ladder, in order of fidelity to live Topstep semantics + cost to run:
+
+| Rail | Adapter | Cost | What it validates |
+|---|---|---|---|
+| 1. Backtest | `SimExecutionClient` (Plan 4) | $0 | Strategy logic, P&L math, journaling. No rules enforcement. |
+| 2. IB Paper | `IBExecutionClient` (Plan 6) | $0 | Wire-format round-trip, fills against IB's paper-account fill model, reconnect handling. No Topstep rules. |
+| 3. TopstepX Sim | `TopstepXSimClient` (Plan 11) | $0 | Topstep rule semantics — phantom MLL liquidation, max-position cap, hard-flat 15:10 CT, EFA scaling tiers, Consistency 50% gate. Same `CombineIntradayDrawdown` / `EFAStandardEoDDrawdown` policies as live. |
+| 4. TopstepX Live | `TopstepXExecutionClient` (Plan 8) | Combine fee | The real account. Identical risk-gate code path as rail 3. |
+
+The bot validates against rails 1 → 2 → 3 before any rail-4 spend. Rail 3 catches the classes of bug that rail 1 + 2 cannot (anything Topstep-rule-shaped) without burning a real Combine. The named scenarios in `bot.execution.topstepx_sim.scenarios` (Combine pass, Combine fail by MLL, Combine fail by max-position, EFA payout flow, EFA Consistency breach, hard-flat 15:10) are the rail-3 integration suite; rail 4 reuses the same risk-gate so a rail-3 pass implies a rail-4 pass for those rule paths.
+
 ---
 
 ## 6. Open questions
