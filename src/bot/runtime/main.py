@@ -476,6 +476,7 @@ async def run_fleet(
     bus: _Bus | None = None,
     dashboard_enabled: bool = False,
     dashboard_port: int = 8765,
+    account_max_mini: int = 5,
 ) -> int:
     """Load N BotSpecs, resolve them, run them concurrently under one broker.
 
@@ -489,6 +490,11 @@ async def run_fleet(
     constructed when --dashboard is set so production runs get both
     pieces wired through one CLI flag.
 
+    Plan 22 T2: `account_max_mini` (default 5 = Topstep $50K Combine cap)
+    is the cross-bot allocator cap. Operators of larger Topstep accounts
+    (e.g. $150K → 15 minis) tune via the `--account-max-mini` CLI flag.
+    Logged at startup so `--check` output reveals the active value.
+
     Returns EXIT_OK on success, EXIT_NO_BOTS if zero enabled bots.
     """
     from bot.markets.registry import get_market
@@ -500,6 +506,11 @@ async def run_fleet(
     from bot.runtime.fleet.spec import load_bot_specs
 
     _bus: _Bus = bus or _NullBus()
+
+    # Plan 22 T2: surface the active account cap on every startup so the
+    # operator can confirm via `--check` stdout that they're running with
+    # the expected sizing (default 5 = $50K Combine).
+    log.info("fleet config: account_max_mini=%d", account_max_mini)
 
     specs = load_bot_specs(bots_dir)
     enabled = [s for s in specs if s.enabled]
@@ -545,12 +556,13 @@ async def run_fleet(
     factory = bar_source_factory or (lambda spec: SimBarSource([]))
     allocator = None
     if dashboard_enabled:
-        # Plan 21: --dashboard also turns the cross-bot allocator on.
-        # 5 minis is Topstep's $50K Combine account cap; bigger accounts
-        # tune via risk_params in their own BotSpecs (per-bot caps still
-        # run via the gate; this is the SHARED account cap).
+        # Plan 21: --dashboard turns the cross-bot allocator on.
+        # Plan 22 T2: allocator cap comes from the CLI (`account_max_mini`,
+        # default 5 = $50K Combine). $100K accounts pass 10; $150K → 15.
+        # Per-bot caps still run via each bot's own gate; this is the
+        # SHARED account cap.
         allocator = FleetAllocator(
-            account_max_mini=5, market_lookup=get_market,
+            account_max_mini=account_max_mini, market_lookup=get_market,
         )
         log.info("dashboard serving at http://127.0.0.1:%d/", dashboard_port)
     fleet = FleetRuntime(
