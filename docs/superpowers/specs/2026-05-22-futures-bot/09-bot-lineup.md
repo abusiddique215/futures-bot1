@@ -49,3 +49,21 @@ VSL-aligned bot family. Each bot is a `BotSpec` YAML under `config/bots/<name>.y
 **Narrow news-event windows interpretation:** 08:20-08:40 (pre-NFP / pre-data), 09:55-10:10 (10:00 ET data drops), 13:55-14:15 (FOMC-style 14:00 ET releases). The VSL doesn't label these; they correspond to common high-impact economic release times in ET.
 
 **Strategy logic disclaimer:** The VSL does not reveal Gold Bot's entry rules. The Bollinger+RSI mean-reversion design is OUR interpretation of mid-day gold chop. `MeanReversionStrategy` is parameterized cleanly so Plans 18 (ES Scalper) and 20 (NQ Maintenance) reuse the class with different tunings.
+
+## NQ Maintenance (NQ 24/7 Live-Only)
+
+**Source:** VSL caption at ~23:00, verbatim — *"The live only maintenance systems trade automatically 24/7."* No chart screenshot; the bot identity (NQ, 24/7, live-only, conservative) is the load-bearing observable.
+
+**Market:** NQ1! / MNQH26 (CME NASDAQ-100 E-mini Futures; micros for $50K Combine sizing — but bot is enabled on EFA only, see safety property below)
+**Timeframe:** 1-minute or 5-minute bars (configurable via bar source; the strategy is timeframe-agnostic)
+**Schedule:** `AlwaysOn` — 24/7, no session windows. Bars at every hour reach the strategy.
+**Risk policy:** EFA Standard (the only live-only policy in the registry). Combine pairings are refused at boot — see safety property.
+**Strategy:** `mean_reversion_bb` (`MeanReversionStrategy`) with wide bands + relaxed RSI — `bb_period=50`, `bb_stddev=3.0`, `rsi_period=21`, oversold/overbought=20/80, `reward_ratio=0.5`, `max_trades_per_day=2`. Only extreme moves pierce the bands; the bot stays on the bench most of the time.
+**Position size:** Fixed 1 micro (`quantity=1` in `NQ_MAINTENANCE_DEFAULTS`).
+**Config:** `config/bots/nq_maintenance.yml` (ships **DISABLED** — operator opts in only after passing Combine and moving the account to EFA)
+
+**Safety property — combine+always is refused at boot:** `LiveOnlyGuard` (`bot.runtime.fleet.live_only_guard`) raises `IncompatibleBotSpecError` from `BotRegistry.build` whenever `schedule_type=always` is paired with `risk_policy=combine_intraday`. Topstep Combine requires a 15:10 CT hard-flat; pairing it with an AlwaysOn schedule means the bot keeps trying to re-enter against forced closes every afternoon. The guard surfaces the misconfig at boot time with a clear remediation pointer (`use efa_standard for live/funded accounts`).
+
+**Strategy logic disclaimer:** The VSL does not reveal any maintenance-bot entry rules. The wide-BB + extreme-RSI tuning is OUR interpretation of "low-frequency, conservative" — it produces << 1 entry / day on a sinusoidal year fixture. A future plan could swap to a different signal generator; the bot identity (NQ, 24/7, EFA, conservative) is the stable contract.
+
+**Known limitation (Plan 21 candidate):** The risk gate's `_check_hard_flat` is policy-agnostic — it denies any open-increasing intent after 15:10 CT regardless of which policy is wired. A 24/7 EFA bot therefore effectively can't open new positions in the 15:10 CT → 17:00 CT window even though EFA itself permits it. Existing positions are unaffected (the check only blocks opens). Plan 21 should either make `_check_hard_flat` policy-aware or document the daily quiet window as a first-class behavior.
