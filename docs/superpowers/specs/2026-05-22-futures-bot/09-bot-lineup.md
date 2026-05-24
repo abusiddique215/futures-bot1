@@ -49,3 +49,26 @@ VSL-aligned bot family. Each bot is a `BotSpec` YAML under `config/bots/<name>.y
 **Narrow news-event windows interpretation:** 08:20-08:40 (pre-NFP / pre-data), 09:55-10:10 (10:00 ET data drops), 13:55-14:15 (FOMC-style 14:00 ET releases). The VSL doesn't label these; they correspond to common high-impact economic release times in ET.
 
 **Strategy logic disclaimer:** The VSL does not reveal Gold Bot's entry rules. The Bollinger+RSI mean-reversion design is OUR interpretation of mid-day gold chop. `MeanReversionStrategy` is parameterized cleanly so Plans 18 (ES Scalper) and 20 (NQ Maintenance) reuse the class with different tunings.
+
+## ES Scalper (ES 10m Daily Exit)
+
+**Source:** "RP - ES Scalper (10m) [Daily Exit]" overlay on ES1! chart at ~20:00 in the VSL, with the strategy report showing 3,029 trades / 73.65% profitable / 1.097 profit factor / +$68,300 net / $24,400 max drawdown.
+
+**Market:** ES1! / MESH26 (CME S&P 500 E-mini Futures; micros sized for $50K Combine)
+**Timeframe:** 10-minute bars (per VSL "10" in chart header + "(10m)" in bot label)
+**Schedule:** Market hours 08:30 → 14:45 CT (25-minute cushion before Topstep's 15:10 CT hard-flat — scalper needs cleanup time)
+**Risk policy:** EFA Standard (maintenance/live-family, EoD-trailing MLL)
+**Strategy:** `mean_reversion_bb` (MeanReversionStrategy) — same class as Gold Bot, tighter parameters
+**Position size:** Fixed 1 micro
+**Config:** `config/bots/es_scalper.yml`
+
+**Parameter tightening vs Gold Bot (rationale):** ES Scalper turns over faster than Gold Bot. The tunings encode the "scalper" framing:
+- `bb_period` 10 vs Gold's 20 — half the BB lookback → faster band response, more entry triggers per session.
+- `bb_stddev` 1.5 vs 2.0 — narrower bands → looser entry threshold.
+- `rsi_period` 9 / `rsi_oversold` 35 / `rsi_overbought` 65 vs Gold's 14 / 30 / 70 — shorter, less extreme thresholds → more frequent oversold/overbought signals.
+- `reward_ratio` 0.75 vs 1.0 — smaller stop distance (sigma × 0.75) → faster stop-out / re-entry cycle.
+- `max_trades_per_day` 10 vs 3 — sized to the VSL's implied ~10+ trades/day cadence (3,029 trades over the strategy-report window).
+
+**VSL claim comparison protocol:** When a real ES FirstRateData fixture is available (deferred — not built in Plan 18), the backtest harness should print actual trade count / win rate / net profit alongside the VSL claim (3,029 / 73.65% / $68,300). Mismatches are not pass/fail — the VSL strategy report is opaque about period, contract sizing, and slippage assumptions. Treat as sanity check only.
+
+**Strategy logic disclaimer:** The VSL does not reveal ES Scalper's entry rules. The tightened mean-reversion design is OUR interpretation of "Scalper (10m) [Daily Exit]" reusing Gold Bot's strategy class. Document parameter changes if backtest research surfaces a better tuning.
