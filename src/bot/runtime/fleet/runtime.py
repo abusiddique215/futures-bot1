@@ -181,7 +181,11 @@ class FleetRuntime:
                     symbol=bot.spec.symbol,
                     schedule=bot.schedule,
                     allocator=self._allocator,
-                    bot_name=bot.name if self._allocator is not None else None,
+                    # Plan 23 T3: bot_name is also used to label per-bar
+                    # telemetry events. Pass it unconditionally so dashboard
+                    # events carry a stable identity, even when the allocator
+                    # isn't wired.
+                    bot_name=bot.name,
                     fleet_positions_fn=(
                         _fleet_positions if self._allocator is not None else None
                     ),
