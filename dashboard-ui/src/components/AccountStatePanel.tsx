@@ -1,6 +1,6 @@
 import { ArrowDown, ArrowRight, ArrowUp } from "lucide-react";
 import type { AccountSummary } from "@/lib/api";
-import { dollars, percent, pnlClass } from "@/lib/format";
+import { dollars, pnlClass } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -9,16 +9,16 @@ interface Props {
 }
 
 /**
- * Risk header strip — fixed at the top of every screen.
- * Balance · Equity · Open P&L · Closed P&L Today · MLL distance · Profit Target · Contracts open
+ * Risk header strip — fleet-aggregated rollup. Sourced from
+ * `GET /api/account_summary` (sum across per-bot journal snapshots).
  *
- * Every value carries: color (sign-aware) + arrow icon + monospace number.
- * Visual hierarchy: risk warnings (MLL) dominate when distance shrinks.
+ * Visible: Balance · Equity · Open P&L · Closed P&L Today · High Water ·
+ * Contracts open. The full MLL / Profit Target progress bars need
+ * per-account broker state that the backend doesn't expose yet — when
+ * that lands (Plan 24+), they go here.
  */
 export function AccountStatePanel({ account, className }: Props) {
-  const mllRatio = mllProgress(account);
-  const targetRatio = targetProgress(account);
-  const mllTone = mllRatio > 0.5 ? "bg-danger" : mllRatio > 0.25 ? "bg-warn" : "bg-profit";
+  const equityDrawdown = account.high_water - account.equity;
 
   return (
     <div
@@ -44,63 +44,13 @@ export function AccountStatePanel({ account, className }: Props) {
         arrow={signArrow(account.closed_pnl_today)}
         mono
       />
-
-      {/* MLL distance — drains red as equity approaches MLL */}
-      <div className="min-w-[180px]">
-        <div className="flex items-baseline justify-between">
-          <span className="text-[10px] uppercase tracking-wide text-text-muted">
-            Distance to MLL
-          </span>
-          <span className="text-xs text-text-muted font-mono">
-            {percent(mllRatio)} used
-          </span>
-        </div>
-        <div className="mt-1 flex items-center gap-2">
-          <span className="font-mono text-sm text-text-primary">
-            {dollars(account.distance_to_mll)}
-          </span>
-        </div>
-        <div className="mt-1 h-1.5 bg-bg-3 rounded overflow-hidden">
-          <div
-            className={cn("h-full transition-all", mllTone)}
-            style={{ width: `${Math.min(100, Math.round(mllRatio * 100))}%` }}
-            role="progressbar"
-            aria-valuenow={Math.round(mllRatio * 100)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-label="MLL usage"
-          />
-        </div>
-      </div>
-
-      {/* Profit target progress */}
-      <div className="min-w-[180px]">
-        <div className="flex items-baseline justify-between">
-          <span className="text-[10px] uppercase tracking-wide text-text-muted">
-            To Profit Target
-          </span>
-          <span className="text-xs text-text-muted font-mono">
-            {percent(targetRatio)} done
-          </span>
-        </div>
-        <div className="mt-1 flex items-center gap-2">
-          <span className="font-mono text-sm text-text-primary">
-            {dollars(account.distance_to_target)}
-          </span>
-        </div>
-        <div className="mt-1 h-1.5 bg-bg-3 rounded overflow-hidden">
-          <div
-            className="h-full bg-profit transition-all"
-            style={{ width: `${Math.min(100, Math.max(0, Math.round(targetRatio * 100)))}%` }}
-            role="progressbar"
-            aria-valuenow={Math.round(targetRatio * 100)}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-label="Profit target progress"
-          />
-        </div>
-      </div>
-
+      <Stat label="High Water" value={dollars(account.high_water)} mono />
+      <Stat
+        label="Drawdown"
+        value={dollars(equityDrawdown)}
+        tone={equityDrawdown > 0 ? "text-loss" : "text-flat"}
+        mono
+      />
       <Stat
         label="Contracts"
         value={`${account.contracts_open}`}
@@ -125,10 +75,18 @@ function Stat({
   arrow?: "up" | "down" | "flat";
 }) {
   const ArrowIcon =
-    arrow === "up" ? ArrowUp : arrow === "down" ? ArrowDown : arrow === "flat" ? ArrowRight : null;
+    arrow === "up"
+      ? ArrowUp
+      : arrow === "down"
+        ? ArrowDown
+        : arrow === "flat"
+          ? ArrowRight
+          : null;
   return (
     <div className="min-w-[110px]">
-      <div className="text-[10px] uppercase tracking-wide text-text-muted">{label}</div>
+      <div className="text-[10px] uppercase tracking-wide text-text-muted">
+        {label}
+      </div>
       <div
         className={cn(
           "text-sm font-medium inline-flex items-center gap-1.5",
@@ -147,19 +105,4 @@ function signArrow(value: number): "up" | "down" | "flat" {
   if (value > 0) return "up";
   if (value < 0) return "down";
   return "flat";
-}
-
-function mllProgress(a: AccountSummary): number {
-  // Fraction of the buffer between high_water and MLL that has been consumed.
-  const buffer = a.high_water - a.mll_value;
-  if (buffer <= 0) return 1;
-  const used = a.high_water - a.equity;
-  return Math.max(0, Math.min(1, used / buffer));
-}
-
-function targetProgress(a: AccountSummary): number {
-  // Span: from MLL floor up to the profit target. Fill = how high equity has climbed.
-  const span = a.target_value - a.mll_value;
-  if (span <= 0) return 0;
-  return Math.max(0, Math.min(1, (a.equity - a.mll_value) / span));
 }
