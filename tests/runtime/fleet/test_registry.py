@@ -135,6 +135,56 @@ def test_custom_strategy_registration() -> None:
     assert resolved.strategy.kw == {"foo": 1}
 
 
+def test_mean_reversion_bb_resolves_with_gold_defaults() -> None:
+    """Verify the registry can resolve a MeanReversionStrategy from a spec.
+
+    Uses GOLD_BOT_DEFAULTS directly so a future change to the defaults flows
+    through both the YAML and this resolution test."""
+    from bot.strategy.mean_reversion import MeanReversionStrategy
+    from bot.strategy.profiles.gold_bot import GOLD_BOT_DEFAULTS
+
+    reg = BotRegistry()
+    spec = _spec(
+        strategy_id="mean_reversion_bb",
+        strategy_params=dict(GOLD_BOT_DEFAULTS),
+        risk_policy="efa_standard",
+        risk_params={"mll_amount": 2000},
+        name="gold",
+    )
+    resolved = reg.build(spec, broker=_broker())
+    assert isinstance(resolved.strategy, MeanReversionStrategy)
+    assert resolved.strategy.symbol == "MGCH26"
+
+
+def test_mean_reversion_bb_overrides_via_params() -> None:
+    """Plans 18/20 will pass different params (e.g. ES symbol, tighter
+    bb_period) into the same registered strategy."""
+    from bot.strategy.mean_reversion import MeanReversionStrategy
+
+    reg = BotRegistry()
+    spec = _spec(
+        strategy_id="mean_reversion_bb",
+        strategy_params={
+            "bb_period": 10,
+            "bb_stddev": 1.5,
+            "rsi_period": 7,
+            "rsi_oversold": 25,
+            "rsi_overbought": 75,
+            "reward_ratio": 0.8,
+            "max_trades_per_day": 5,
+            "symbol": "MES",
+            "quantity": 2,
+        },
+        risk_policy="efa_standard",
+        risk_params={"mll_amount": 2500},
+        name="es_scalper_preview",
+    )
+    resolved = reg.build(spec, broker=_broker())
+    assert isinstance(resolved.strategy, MeanReversionStrategy)
+    assert resolved.strategy.symbol == "MES"
+    assert resolved.strategy.quantity == 2
+
+
 def test_orb_params_round_trip() -> None:
     reg = BotRegistry()
     spec = _spec(strategy_params={
