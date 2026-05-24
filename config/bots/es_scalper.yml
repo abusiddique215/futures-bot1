@@ -1,0 +1,42 @@
+# ES Scalper — VSL "RP - ES Scalper (10m) [Daily Exit]" at ~20:00
+# (ES1! / 10-minute / CME).
+#
+# Strategy: reuses Plan 17's MeanReversionStrategy (mean_reversion_bb) with a
+# tighter scalper tuning vs Gold Bot — shorter BB (10), tighter stddev (1.5),
+# shorter/tighter RSI (9 / 35-65), smaller stop via reward_ratio=0.75, and a
+# higher daily trade cap (10) to match the VSL claim of ~10+ entries/day
+# implied by 3,029 trades in the strategy report.
+#
+# Symbol: MESH26 (Micro ES, March-2026) — micros are sized for the $50K
+# Combine. To trade full ES, change `symbol` and the strategy_params `symbol`
+# to a full-ES contract (e.g. ESH26); MeanReversionStrategy + the market
+# registry handle the swap without code changes.
+#
+# Schedule: simple US regular-session window 08:30 - 14:45 CT (25-minute
+# cushion before Topstep's 15:10 CT hard-flat — scalper needs cleanup time
+# for any open positions).
+#
+# Strategy entry rules are NOT revealed by the VSL — see
+# docs/superpowers/plans/2026-05-23-plan-18-es-scalper.md for the
+# mean-reversion design rationale + tightening vs Gold Bot.
+name: es_scalper
+enabled: true
+symbol: MESH26
+strategy_id: mean_reversion_bb
+strategy_params:
+  bb_period: 10
+  bb_stddev: 1.5
+  rsi_period: 9
+  rsi_oversold: 35.0
+  rsi_overbought: 65.0
+  reward_ratio: 0.75
+  max_trades_per_day: 10
+  symbol: MESH26
+risk_policy: efa_standard
+risk_params:
+  mll_amount: 2000
+schedule_type: market_hours
+schedule_params:
+  open_ct: "08:30"
+  close_ct: "14:45"
+journal_path: state/journal_es_scalper.db
