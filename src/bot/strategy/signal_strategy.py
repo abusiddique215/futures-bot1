@@ -86,6 +86,15 @@ class SignalStrategy:
             return
         self.start()
 
+    async def teardown(self) -> None:
+        """FleetRuntime hook (Plan 22 T3) — symmetric counterpart to setup().
+
+        Calls stop() to cancel the background pump task so the Discord
+        client (or fixture source) disconnects cleanly on fleet shutdown.
+        Idempotent — safe to call even when setup() was never invoked.
+        """
+        await self.stop()
+
     def start(self) -> asyncio.Task[None]:
         """Spawn the background pump task. Idempotent: returns existing task
         if already started. Raises RuntimeError if no source was provided.
