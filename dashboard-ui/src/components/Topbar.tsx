@@ -1,5 +1,7 @@
 import { NavLink } from "react-router-dom";
 import { Activity } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { useUiStore } from "@/store/ui";
 import { HeartbeatIndicator } from "@/components/HeartbeatIndicator";
 import { KillSwitch } from "@/components/KillSwitch";
@@ -12,8 +14,29 @@ const NAV = [
 ];
 
 export function Topbar() {
-  const activeProfile = useUiStore((s) => s.activeProfile);
   const setActiveProfile = useUiStore((s) => s.setActiveProfile);
+  const queryClient = useQueryClient();
+
+  const { data: profiles } = useQuery({
+    queryKey: ["profiles"],
+    queryFn: api.listProfiles,
+    refetchInterval: 30_000,
+  });
+
+  const activate = useMutation({
+    mutationFn: (name: string) => api.activateProfile(name),
+    onSuccess: (res) => {
+      setActiveProfile(res.active);
+      // Profile activation may change effective bot specs; refresh.
+      queryClient.invalidateQueries({ queryKey: ["fleet"] });
+      queryClient.invalidateQueries({ queryKey: ["bot"] });
+      queryClient.invalidateQueries({ queryKey: ["profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["overrides"] });
+    },
+  });
+
+  const active = profiles?.active ?? "default";
+  const profileList = profiles?.profiles ?? [active];
 
   return (
     <header className="sticky top-0 z-30 bg-bg-0/85 backdrop-blur border-b border-border">
@@ -49,16 +72,24 @@ export function Topbar() {
 
         <div className="flex-1" />
 
-        {/* Profile switcher */}
+        {/* Profile switcher — POST /api/profiles/{name}/activate on change */}
         <label className="flex items-center gap-2 text-xs text-text-secondary">
           <span className="uppercase tracking-wide">Profile</span>
           <select
-            value={activeProfile}
-            onChange={(e) => setActiveProfile(e.target.value)}
-            className="bg-bg-2 border border-border rounded px-2 py-1 text-sm text-text-primary font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            value={active}
+            onChange={(e) => {
+              const name = e.target.value;
+              if (name !== active) activate.mutate(name);
+            }}
+            disabled={activate.isPending}
+            className="bg-bg-2 border border-border rounded px-2 py-1 text-sm text-text-primary font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50"
             aria-label="Active profile"
           >
-            <option value="default">default</option>
+            {profileList.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
           </select>
         </label>
 

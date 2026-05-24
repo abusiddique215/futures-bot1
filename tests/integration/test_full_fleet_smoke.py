@@ -236,7 +236,12 @@ async def test_full_fleet_smoke_all_six_bots(
         ) as client:
             for _ in range(60):  # ~6s budget
                 try:
-                    r_index = await client.get("/")
+                    # /v1/ hits the legacy fleet page (server-rendered
+                    # with the bot names embedded). `/` returns the SPA
+                    # index whose only useful runtime check is the
+                    # `<div id="root"` host, which we cover in the v2
+                    # e2e suite.
+                    r_index = await client.get("/v1/")
                     r_health = await client.get("/healthz")
                     dashboard_responses["index"] = r_index.status_code
                     dashboard_responses["health"] = r_health.status_code

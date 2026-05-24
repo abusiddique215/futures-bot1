@@ -1,95 +1,105 @@
 /**
  * Multiplexed WebSocket client with auto-reconnect.
  *
- * Server contract (matches plan §T5 and §T3):
- *   - Client → server:  { action: "subscribe", channels: ["fleet", "bot:surgebot_nq"] }
- *                       { action: "unsubscribe", channels: [...] }
- *   - Server → client:  { type: "bar_tick" | "fill" | "risk_decision" | "account_update" | "bot_intent",
- *                          channel: "fleet" | "bot:<name>",
- *                          ts: number,  // epoch ms
- *                          payload: { ... }  // event-specific
- *                        }
+ * Server contract (matches `src/bot/dashboard/v2/ws_bridge.py`):
+ *   - Client → server:  { action: "subscribe", channels: ["fleet"] }
+ *                       { action: "subscribe", channels: ["bot:alpha"] }
+ *   - Server → client:  { kind: <kind>, data: <object> }
  *
- * Reconnect: exponential backoff, capped at 30s. On reconnect, all
- * active subscriptions are re-sent automatically.
+ *   kind ∈ { bar_tick | account_update | bot_intent | fill | risk_decision | bot_state_change }
+ *
+ * Channel semantics (server-side):
+ *   "fleet"     — every event
+ *   "bot:<n>"   — events whose `data.bot === <n>`
+ *
+ * Reconnect: exponential backoff capped at 30s. On reconnect, all active
+ * subscriptions are re-sent automatically.
  */
-
-import type { AccountSummary, BotIntent, Fill, BotSummary } from "./api";
 
 // ─── Event payload types ─────────────────────────────────────────────────
 
-export interface BarTickPayload {
+export interface BarPayload {
+  ts: string;
+  o: number;
+  h: number;
+  low: number;
+  c: number;
+  v: number;
+}
+
+export interface BarTickData {
   bot: string;
   symbol: string;
-  bar: { ts: number; o: number; h: number; l: number; c: number; v: number };
+  bar: BarPayload;
 }
 
-export interface AccountUpdatePayload {
-  /** "fleet" for aggregate updates or a bot name for per-bot. */
-  scope: "fleet" | string;
-  account: AccountSummary;
-  /** Per-bot summaries when scope === "fleet". */
-  bots?: BotSummary[];
-}
-
-export interface FillPayload {
+export interface AccountUpdateData {
   bot: string;
-  fill: Fill;
+  state: "DISABLED" | "ARMED_WAITING" | "IN_TRADE" | "LOCKED";
+  equity: number;
+  balance: number;
+  realized_pnl_today: number;
+  unrealized_pnl: number;
+  high_water: number;
+  distance_to_mll: number;
+  distance_to_target: number | null;
+  contracts_open: number;
+  dll_remaining: number;
 }
 
-export interface RiskDecisionPayload {
+export interface BotIntentData {
   bot: string;
-  /** "allowed" | "rejected" | "skipped" — strings to stay decoupled. */
-  decision: string;
+  watching_for: string;
+  schedule_open: boolean;
+  next_window_opens_in_seconds: number | null;
+  max_trades_remaining: number | null;
+}
+
+export interface FillData {
+  bot: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  quantity: number;
+  fill_price: number;
+  timestamp: string;
+  client_order_id: string;
+}
+
+export interface RiskDecisionData {
+  bot: string;
+  approved: boolean;
+  rule: string | null;
+  reason: string | null;
+  timestamp: string;
+}
+
+export interface BotStateChangeData {
+  bot: string;
+  from_state: string;
+  to_state: string;
   reason: string;
-  detail: Record<string, unknown>;
-}
-
-export interface BotIntentPayload {
-  bot: string;
-  intent: BotIntent;
+  timestamp: string;
 }
 
 export type WsEvent =
-  | { type: "bar_tick"; channel: string; ts: number; payload: BarTickPayload }
-  | {
-      type: "account_update";
-      channel: string;
-      ts: number;
-      payload: AccountUpdatePayload;
-    }
-  | { type: "fill"; channel: string; ts: number; payload: FillPayload }
-  | {
-      type: "risk_decision";
-      channel: string;
-      ts: number;
-      payload: RiskDecisionPayload;
-    }
-  | {
-      type: "bot_intent";
-      channel: string;
-      ts: number;
-      payload: BotIntentPayload;
-    };
+  | { kind: "bar_tick"; data: BarTickData }
+  | { kind: "account_update"; data: AccountUpdateData }
+  | { kind: "bot_intent"; data: BotIntentData }
+  | { kind: "fill"; data: FillData }
+  | { kind: "risk_decision"; data: RiskDecisionData }
+  | { kind: "bot_state_change"; data: BotStateChangeData }
+  | { kind: string; data: Record<string, unknown> };
 
-export type WsEventType = WsEvent["type"];
+export type WsEventKind = WsEvent["kind"];
 
-// ─── Type guard (narrow JSON.parse output) ───────────────────────────────
+// ─── Type guard ──────────────────────────────────────────────────────────
 
 function isWsEvent(value: unknown): value is WsEvent {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
-  if (typeof v.type !== "string") return false;
-  if (typeof v.channel !== "string") return false;
-  if (typeof v.ts !== "number") return false;
-  if (typeof v.payload !== "object" || v.payload === null) return false;
-  return (
-    v.type === "bar_tick" ||
-    v.type === "account_update" ||
-    v.type === "fill" ||
-    v.type === "risk_decision" ||
-    v.type === "bot_intent"
-  );
+  if (typeof v.kind !== "string") return false;
+  if (typeof v.data !== "object" || v.data === null) return false;
+  return true;
 }
 
 // ─── Client ──────────────────────────────────────────────────────────────
@@ -101,10 +111,8 @@ export type WsStatus = "connecting" | "open" | "closed" | "error";
 
 export interface WsClientOptions {
   url?: string;
-  /** Initial reconnect backoff in ms (doubles each failure, capped at maxBackoffMs). */
   initialBackoffMs?: number;
   maxBackoffMs?: number;
-  /** Inject a custom WebSocket constructor (testing). */
   WebSocketImpl?: typeof WebSocket;
 }
 
@@ -160,23 +168,22 @@ export class WsClient {
 
   subscribe(channels: string[]): void {
     for (const ch of channels) this.channels.add(ch);
-    this.send({ action: "subscribe", channels });
-  }
-
-  unsubscribe(channels: string[]): void {
-    for (const ch of channels) this.channels.delete(ch);
-    this.send({ action: "unsubscribe", channels });
+    this.send({ action: "subscribe", channels: Array.from(this.channels) });
   }
 
   onEvent(listener: Listener): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   onStatus(listener: StatusListener): () => void {
     this.statusListeners.add(listener);
     listener(this.status);
-    return () => this.statusListeners.delete(listener);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
   }
 
   getStatus(): WsStatus {
@@ -198,7 +205,6 @@ export class WsClient {
     this.ws.onopen = () => {
       this.setStatus("open");
       this.backoff = this.initialBackoff;
-      // Re-subscribe to anything we had before the disconnect.
       if (this.channels.size > 0) {
         this.send({
           action: "subscribe",

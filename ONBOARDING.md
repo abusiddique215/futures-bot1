@@ -149,7 +149,7 @@ Every bot ships `enabled: false`. Promotion to live is a 5-step protocol:
 2. **IB Paper run.** At least one full week of IB-paper running with zero ungraceful exits.
 3. **TopstepX Sim run.** At least one full week of TopstepX-sim with zero reconcile mismatches in `state/journal_<bot>.db`.
 4. **Flip the YAML.** `enabled: true` in `config/bots/<bot>.yml`. Commit the change. Tag it.
-5. **Run with `--dashboard`.** First live run goes with `python -m bot.runtime --bots config/bots/ --dashboard` so the operator can watch heartbeats + per-bot status.
+5. **Run with `--dashboard`.** First live run goes with `python -m bot.runtime --bots config/bots/ --dashboard` so the operator can watch heartbeats + per-bot status in the v2 React UI (see "Dashboard v2" below).
 
 The `FleetRuntime` will refuse to boot a bot with `combine_intraday` risk + `always` schedule (`live_only_guard`). That's a Topstep ToS thing — Combine accounts must flatten by 15:10 CT.
 
@@ -164,7 +164,8 @@ The `FleetRuntime` will refuse to boot a bot with `combine_intraday` risk + `alw
 | `src/bot/backtest/` | Backtest engine, `SimExecutionClient`, tracker. |
 | `src/bot/execution/` | Broker adapters (IB, TopstepX, sim). |
 | `src/bot/journal/` | Per-bot SQLite journal + queries. |
-| `src/bot/dashboard/` | FastAPI side-car dashboard (read-only). |
+| `src/bot/dashboard/` | FastAPI side-car: SPA host (v2), REST + WS API, legacy v1 HTML. |
+| `dashboard-ui/` | React + Vite + shadcn/ui frontend; built to `src/bot/dashboard/v2/static/dist/`. |
 | `config/bots/*.yml` | The 6 bot specs. |
 | `config/profiles/` | Strategy parameter profiles. |
 | `tests/` | Unit + integration tests (~990 total). |
@@ -173,6 +174,56 @@ The `FleetRuntime` will refuse to boot a bot with `combine_intraday` risk + `alw
 | `docs/superpowers/plans/` | Implementation plans (1 - 22). |
 | `state/` | Runtime artifacts (journal DBs, proof bundles, heartbeats). |
 | `deploy/` | launchd plist + deploy helpers (macOS). |
+
+## Dashboard v2 (Plan 23)
+
+The dashboard ships as a React SPA served by the FastAPI side-car. Open
+`http://127.0.0.1:8765/` after starting the fleet with `--dashboard`.
+
+```bash
+# Build the SPA bundle once (re-run after pulling frontend changes).
+cd dashboard-ui && pnpm install && pnpm build && cd ..
+
+# Start the fleet with the dashboard.
+python -m bot.runtime --bots config/bots/ --dashboard
+# → SPA at http://127.0.0.1:8765/
+# → REST + WS under /api/* and /ws
+# → Legacy Jinja fleet/bot pages at /v1/ (read-only fallback)
+```
+
+What the dashboard gives the operator:
+
+- **Overview** — fleet grid + aggregated account roll-up + heartbeat
+  indicator + live `account_update` / `fill` events via WebSocket.
+- **Bot detail** — per-bot intent (`"Watching for ORB breakout > X"`),
+  equity curve (TradingView Lightweight Charts), positions, recent
+  fills, and a `Tune Bot` drawer (ParamsEditor) that writes
+  `strategy_params` / `risk_params` / `schedule_params` overrides
+  scoped to the active profile.
+- **Profiles** — per-user multi-tenant overrides under
+  `state/profiles/<name>/`. Create / fork / delete / activate. The
+  `default` profile cannot be deleted. Activation flips the active
+  marker; restart the fleet to rebuild bots with the new effective
+  spec.
+- **Settings** — theme / refresh-rate / timezone, persisted to the
+  active profile's `prefs.json` via `PUT /api/profiles/{name}/prefs`.
+- **Flatten all** — kill-switch button in the topbar. Confirmation
+  modal; one click on confirm calls `force_flatten_now()` for every
+  bot's RiskGate (cancels working orders + closes positions).
+
+Profile layout on disk (filesystem-isolated; one user's overrides cannot
+leak into another's):
+
+```
+state/profiles/
+├── default/
+│   ├── overrides.yaml      # {} initially
+│   ├── prefs.json
+│   ├── history.jsonl       # append-only audit
+│   └── .lock               # fcntl flock sentinel
+└── <username>/             # auto-created on first run
+    └── …
+```
 
 ## Operational footguns (read these)
 

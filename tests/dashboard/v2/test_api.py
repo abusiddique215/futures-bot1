@@ -322,3 +322,189 @@ async def test_get_active_profile_includes_username_default(
         resp = await client.get("/api/profiles")
     body = resp.json()
     assert body["active"] == "test_user"
+
+
+# ---------- T7 backend extensions: account_summary, flatten_all, prefs ------
+
+async def test_get_account_summary_aggregates_per_bot_journals(
+    state: DashboardState,
+) -> None:
+    """account_summary sums across per-bot journals — zero when none exist."""
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.get("/api/account_summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    # Both bots have empty journals → all rollups are zero.
+    for key in (
+        "balance", "equity", "open_pnl", "closed_pnl_today",
+        "high_water", "contracts_open",
+    ):
+        assert key in body
+    assert body["contracts_open"] == 0
+
+
+async def test_fleet_view_includes_strategy_id_and_active_profile(
+    state: DashboardState,
+) -> None:
+    """The fleet view exposes strategy_id per bot + the active profile."""
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.get("/api/fleet")
+    body = resp.json()
+    assert body["active_profile"] in ("test_user", "default")
+    for entry in body["bots"]:
+        assert entry["strategy_id"] == "orb_5m"
+
+
+async def test_flatten_all_503_when_no_gates_wired(
+    state: DashboardState,
+) -> None:
+    """Without gates the kill switch is unavailable — returns 503."""
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post("/api/bots/flatten_all")
+    assert resp.status_code == 503
+
+
+async def test_flatten_all_calls_force_flatten_on_each_gate(
+    state: DashboardState,
+) -> None:
+    """With gates wired, POST /api/bots/flatten_all hits force_flatten_now."""
+    called: list[str] = []
+
+    class _FakeGate:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def force_flatten_now(self, reason: str | None = None) -> None:
+            _ = reason
+            called.append(self.name)
+
+    # Replace gates on the state. Use object cast since DashboardState is
+    # frozen — build a new one for the test.
+    from dataclasses import replace
+    test_state = replace(
+        state,
+        gates={
+            "alpha": _FakeGate("alpha"),  # type: ignore[dict-item]
+            "beta": _FakeGate("beta"),    # type: ignore[dict-item]
+        },
+    )
+    app = create_app(test_state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.post("/api/bots/flatten_all")
+    assert resp.status_code == 200
+    assert sorted(resp.json()["flattened"]) == ["alpha", "beta"]
+    assert sorted(called) == ["alpha", "beta"]
+
+
+async def test_prefs_round_trip(state: DashboardState) -> None:
+    """Read prefs (empty), write some, read them back."""
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        get_resp = await client.get("/api/profiles/test_user/prefs")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["prefs"] == {}
+
+        put_resp = await client.put(
+            "/api/profiles/test_user/prefs",
+            json={"prefs": {"theme": "dark", "refresh_rate_ms": 1000}},
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.json()["prefs"]["theme"] == "dark"
+
+        get2 = await client.get("/api/profiles/test_user/prefs")
+        assert get2.json()["prefs"]["refresh_rate_ms"] == 1000
+
+
+async def test_prefs_404_for_unknown_profile(state: DashboardState) -> None:
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.get("/api/profiles/nope/prefs")
+    assert resp.status_code == 404
+
+
+# ---------- SPA mount ------------------------------------------------------
+
+
+def _make_state_with_spa_dist(
+    state: DashboardState, tmp_path: Path,
+) -> DashboardState:
+    """Build a DashboardState pointing at a synthetic SPA dist dir.
+
+    Keeps the tests independent of `dashboard-ui/dist/` having been
+    built locally (the dist is .gitignored).
+    """
+    from dataclasses import replace
+    dist = tmp_path / "spa_dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(
+        '<!doctype html><html><body><div id="root"></div></body></html>',
+        encoding="utf-8",
+    )
+    return replace(state, spa_dist_dir=dist)
+
+
+async def test_spa_root_serves_index_html(
+    state: DashboardState, tmp_path: Path,
+) -> None:
+    """When the SPA dist exists, `/` returns the index containing #root."""
+    spa_state = _make_state_with_spa_dist(state, tmp_path)
+    app = create_app(spa_state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.get("/")
+    assert resp.status_code == 200
+    assert 'id="root"' in resp.text
+
+
+async def test_spa_handles_client_side_routes(
+    state: DashboardState, tmp_path: Path,
+) -> None:
+    """SPA client-side routes /bots/<name>, /profiles, /settings all return
+    the index so React Router can render them after hydration."""
+    spa_state = _make_state_with_spa_dist(state, tmp_path)
+    app = create_app(spa_state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        for path in ("/bots/alpha", "/profiles", "/settings"):
+            resp = await client.get(path)
+            assert resp.status_code == 200, path
+            assert 'id="root"' in resp.text, path
+
+
+async def test_no_spa_dist_falls_back_to_legacy_at_root(
+    tmp_path: Path,
+) -> None:
+    """Without a built SPA, `/` returns the legacy Jinja fleet page."""
+    from dataclasses import replace
+    bots_dir = tmp_path / "bots"
+    bots_dir.mkdir()
+    (bots_dir / "alpha.yml").write_text(_spec_yaml("alpha", str(tmp_path / "alpha.db")))
+    heartbeat = tmp_path / "hb"
+    heartbeat.write_text(datetime(2026, 5, 24, 10, 0, tzinfo=UTC).isoformat())
+    state = DashboardState(bots_dir=bots_dir, heartbeat_path=heartbeat)
+    # Point at a non-existent dist path so the fallback path is taken.
+    state = replace(state, spa_dist_dir=tmp_path / "does-not-exist")
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "alpha" in resp.text  # Jinja-rendered fleet page

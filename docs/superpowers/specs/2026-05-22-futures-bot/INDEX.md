@@ -23,7 +23,8 @@ Quick-navigation file. Read `00-architecture-overview.md` first; everything else
 | 07 | `07-config-and-deploy.md` | Config schema, secrets, Docker, LaunchAgent, restart contract. |
 | 08 | `08-proof-surface.md` | Per-bot proof bundle (StrategyReport JSON + equity PNG + HTML). |
 | 09 | `09-bot-lineup.md` | The six VSL-aligned bots — strategies, schedules, risk policies. |
-| 10 | `10-dashboard-allocator.md` | Local read-only dashboard + cross-bot FleetAllocator. |
+| 10 | `10-dashboard-allocator.md` | Local read-only dashboard (v1) + cross-bot FleetAllocator. |
+| 11 | `11-dashboard-v2.md` | React SPA + REST + WS + profile overlay (Plan 23). |
 
 ## Cross-reference cheat sheet
 

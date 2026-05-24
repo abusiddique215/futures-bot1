@@ -147,10 +147,11 @@ async def test_dashboard_serves_all_three_routes_with_two_bots(tmp_path: Path) -
             # Drive a few more bars through so the journals fill in.
             await asyncio.sleep(0.5)
 
-            resp_root = await client.get("/")
-            resp_alpha = await client.get("/bots/alpha")
-            resp_beta = await client.get("/bots/beta")
-            resp_404 = await client.get("/bots/does-not-exist")
+            # Legacy v1 HTML pages now under /v1/ — the SPA owns `/`.
+            resp_root = await client.get("/v1/")
+            resp_alpha = await client.get("/v1/bots/alpha")
+            resp_beta = await client.get("/v1/bots/beta")
+            resp_404 = await client.get("/v1/bots/does-not-exist")
             resp_health = await client.get("/healthz")
     finally:
         fleet.request_shutdown()
@@ -186,10 +187,14 @@ async def test_dashboard_serves_all_three_routes_with_two_bots(tmp_path: Path) -
 
 
 async def _wait_for_first_response(client: httpx.AsyncClient) -> None:
-    """Poll / until 200; budget ~5 seconds."""
+    """Poll /healthz until 200; budget ~5 seconds.
+
+    Uses /healthz (not /) so it works both when the SPA dist is present
+    (root = SPA index) and when it isn't (root = legacy fleet page).
+    """
     for _ in range(50):
         try:
-            resp = await client.get("/")
+            resp = await client.get("/healthz")
             if resp.status_code == 200:
                 return
         except httpx.ConnectError:

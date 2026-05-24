@@ -41,7 +41,7 @@ export function BotStateIndicator({ state, unrealizedR = 0, className }: Props) 
       </span>
     );
   }
-  if (state === "ERROR") {
+  if (state === "LOCKED") {
     return (
       <span
         className={cn(
@@ -50,7 +50,7 @@ export function BotStateIndicator({ state, unrealizedR = 0, className }: Props) 
         )}
       >
         <Circle className="h-3.5 w-3.5 fill-danger" aria-hidden />
-        <span>Error</span>
+        <span>Locked</span>
       </span>
     );
   }

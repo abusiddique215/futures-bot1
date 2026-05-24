@@ -2,39 +2,36 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { FleetGrid } from "@/components/FleetGrid";
-import { mockBots, mockFleet } from "@/lib/mock";
+import { mockBots } from "@/lib/mock";
 
 describe("FleetGrid", () => {
   it("renders one card per bot in the fixture", () => {
     render(
       <MemoryRouter>
-        <FleetGrid bots={mockBots} now={mockFleet.server_time} />
+        <FleetGrid bots={mockBots} />
       </MemoryRouter>,
     );
     for (const bot of mockBots) {
-      expect(screen.getByText(bot.display_name)).toBeInTheDocument();
+      expect(screen.getByText(bot.name)).toBeInTheDocument();
     }
   });
 
-  it("shows the day-trader state labels", () => {
+  it("shows the strategy_id label", () => {
     render(
       <MemoryRouter>
-        <FleetGrid bots={mockBots} now={mockFleet.server_time} />
+        <FleetGrid bots={mockBots} />
       </MemoryRouter>,
     );
-    // SurgeBot is IN_TRADE +1.2R, Lux Bot ARMED_WAITING, ES Scalper DISABLED
-    expect(screen.getAllByText(/In Trade · \+1\.20R/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Armed — Watching/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Disabled/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/orb_5m/).length).toBeGreaterThan(0);
   });
 
-  it("renders next-window countdown when schedule is closed", () => {
+  it("falls back to Disabled when bot.enabled is false", () => {
     render(
       <MemoryRouter>
-        <FleetGrid bots={mockBots} now={mockFleet.server_time} />
+        <FleetGrid bots={mockBots.filter((b) => !b.enabled)} />
       </MemoryRouter>,
     );
-    expect(screen.getAllByText(/in /).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Disabled/).length).toBeGreaterThan(0);
   });
 
   it("renders empty state when no bots", () => {
