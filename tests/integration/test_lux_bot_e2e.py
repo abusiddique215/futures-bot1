@@ -7,10 +7,11 @@ Drives a synthetic 10-minute bar stream + a FixtureSignalSource carrying
   2. A 4th signal claiming qty=100 → ONE OrderDenied row with rule=MAX_POSITION
      in risk_decisions. The signal flows through the gate without bypass.
 
-The strategy's pump task is started explicitly here — FleetRuntime does
-not currently know to start strategy-managed background tasks. This is
-flagged for Plan 21 (dashboard / runtime polish): if FleetRuntime gains
-a `Strategy.setup(loop)` hook, the explicit start() can be removed.
+Plan 21 added a `Strategy.setup()` lifecycle hook on FleetRuntime — for
+SignalStrategy that hook calls self.start() to spawn the Discord/fixture
+pump task. The previous version of this test called start() explicitly
+because FleetRuntime didn't know to do so; that work is now wired into
+the runtime itself, so the test no longer needs the explicit start().
 """
 from __future__ import annotations
 
@@ -110,18 +111,10 @@ async def test_three_signals_become_three_fills(tmp_path: Path) -> None:
     events = [_signal(source_id=f"sig-{i}") for i in range(3)]
     resolved, strat = _build_lux(tmp_path=tmp_path, broker=sim, events=events)
 
-    # Pump the FixtureSignalSource into the strategy's deque BEFORE the
-    # live loop starts consuming bars. emit_rate=0 + asyncio.sleep(0) yields
-    # all 3 events synchronously in the same task scheduling tick.
-    import asyncio
-    strat.start()
-    for _ in range(20):
-        await asyncio.sleep(0)
-        if strat.pending_count() >= 3:
-            break
-    assert strat.pending_count() == 3
-
-    # Run the fleet over enough bars to drain all 3 signals (cap = 1/bar).
+    # Plan 21: FleetRuntime calls Strategy.setup() before LiveTradingLoop.run(),
+    # which (for SignalStrategy) spawns the pump task that drains the source
+    # into the deque. The test used to call strat.start() + wait for
+    # pending_count manually — now the runtime owns that wiring.
     fleet = FleetRuntime(
         bots=[resolved], broker=sim,
         bar_source_factory=lambda spec: _StaticBarSource(_bars("MNQ", 5)),
@@ -184,13 +177,7 @@ async def test_oversize_signal_denied_by_risk_gate(tmp_path: Path) -> None:
     )
     resolved, strat = _build_lux(tmp_path=tmp_path, broker=sim, events=events)
 
-    import asyncio
-    strat.start()
-    for _ in range(20):
-        await asyncio.sleep(0)
-        if strat.pending_count() >= 1:
-            break
-
+    # FleetRuntime.setup() spawns the pump; no manual start() needed.
     fleet = FleetRuntime(
         bots=[resolved], broker=sim,
         bar_source_factory=lambda spec: _StaticBarSource(_bars("MNQ", 3)),

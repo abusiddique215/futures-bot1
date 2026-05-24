@@ -21,6 +21,7 @@ from bot.backtest.tracker import AccountStateTracker
 from bot.execution.ports import ExecutionClient
 from bot.journal.journal import Journal
 from bot.runtime.bar_source import LiveBarSource
+from bot.runtime.fleet.allocator import FleetAllocator
 from bot.runtime.fleet.registry import ResolvedBot
 from bot.runtime.fleet.spec import BotSpec
 from bot.runtime.live_loop import LiveTradingLoop
@@ -67,12 +68,14 @@ class FleetRuntime:
         bar_source_factory: BarSourceFactory,
         telemetry: _Telemetry,
         heartbeat_path: Path,
+        allocator: FleetAllocator | None = None,
     ) -> None:
         self._bots = bots
         self._broker = broker
         self._bar_source_factory = bar_source_factory
         self._telemetry = telemetry
         self._heartbeat_path = heartbeat_path
+        self._allocator = allocator
 
     async def run(self) -> dict[str, BotResult]:
         """Run every bot concurrently. Failures stay local — caller still
@@ -83,8 +86,31 @@ class FleetRuntime:
 
         journals: list[Journal] = []
         sources: list[_CountingBarSource] = []
+        trackers: dict[str, AccountStateTracker] = {}
         try:
             tasks: list[asyncio.Task[None]] = []
+            # Build all trackers first so the fleet_positions_fn (read by
+            # the allocator) has every bot's tracker available even on the
+            # first bar of any bot.
+            for bot in self._bots:
+                start_balance = float(
+                    bot.spec.risk_params.get("start_balance", 50_000.0)
+                )
+                trackers[bot.name] = AccountStateTracker(
+                    start_balance=start_balance,
+                    is_combine=bot.spec.risk_policy == "combine_intraday",
+                )
+
+            def _fleet_positions() -> dict[str, dict[str, int]]:
+                # Snapshot each bot's open_positions from its tracker. Reads
+                # the tracker's private snapshot path (no fresh timestamp
+                # needed — we only want positions). Cheaper than a per-call
+                # snapshot() because we skip the AccountState construction.
+                return {
+                    name: dict(t._positions)
+                    for name, t in trackers.items()
+                }
+
             for bot in self._bots:
                 journal = await Journal.connect(str(bot.journal_path))
                 await journal.apply_migrations()
@@ -93,26 +119,31 @@ class FleetRuntime:
                 source = _CountingBarSource(self._bar_source_factory(bot.spec))
                 sources.append(source)
 
-                # start_balance must match the policy's start_balance — they
-                # both drive phantom-MLL math. Pulled from the spec's risk_params
-                # so a $100K Combine bot doesn't disagree with its own gate.
-                start_balance = float(
-                    bot.spec.risk_params.get("start_balance", 50_000.0)
-                )
-                tracker = AccountStateTracker(
-                    start_balance=start_balance,
-                    is_combine=bot.spec.risk_policy == "combine_intraday",
-                )
+                # Plan 21: lifecycle hook. Strategies that need to spawn
+                # background tasks (SignalStrategy → Discord pump) implement
+                # setup() and the runtime calls it BEFORE the loop starts.
+                # Uses hasattr to keep the Strategy Protocol pure — Plan 11
+                # strategies don't need to change.
+                if hasattr(bot.strategy, "setup"):
+                    result = bot.strategy.setup()
+                    if asyncio.iscoroutine(result):
+                        await result
+
                 loop = LiveTradingLoop(
                     strategy=bot.strategy,
                     gate=bot.risk_gate,
-                    tracker=tracker,
+                    tracker=trackers[bot.name],
                     broker=self._broker,
                     journal=journal,
                     telemetry=self._telemetry,
                     heartbeat_path=self._heartbeat_path,
                     symbol=bot.spec.symbol,
                     schedule=bot.schedule,
+                    allocator=self._allocator,
+                    bot_name=bot.name if self._allocator is not None else None,
+                    fleet_positions_fn=(
+                        _fleet_positions if self._allocator is not None else None
+                    ),
                 )
                 tasks.append(asyncio.create_task(loop.run(source), name=bot.name))
 
