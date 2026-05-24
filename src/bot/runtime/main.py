@@ -553,7 +553,19 @@ async def run_fleet(
             log.warning("broker.disconnect raised during fleet --check cleanup: %s", e)
         return EXIT_OK
 
-    factory = bar_source_factory or (lambda spec: SimBarSource([]))
+    if bar_source_factory is not None:
+        factory = bar_source_factory
+    elif dashboard_enabled:
+        # Plan 23 follow-up: without a live broker, an empty SimBarSource
+        # would finish every bot in <1s and the dashboard server would exit
+        # with the process. DemoBarSource keeps a synthetic random walk
+        # flowing so the dashboard has live data to display until Ctrl+C.
+        from bot.runtime.bar_source import DemoBarSource as _Demo
+
+        def factory(spec: Any) -> Any:
+            return _Demo(symbol=spec.symbol, interval_seconds=5.0)
+    else:
+        factory = lambda spec: SimBarSource([])  # noqa: E731  intentional inline
     allocator = None
     if dashboard_enabled:
         # Plan 21: --dashboard turns the cross-bot allocator on.
