@@ -1,6 +1,6 @@
 # Topstep Futures Trading Bot Fleet
 
-Python automated futures trading for the Topstep prop firm — a fleet of six independent bots running concurrently against a single Topstep account, with policy-aware risk gating, a cross-bot account-cap allocator, and a local read-only dashboard.
+Python automated futures trading for the Topstep prop firm — a fleet of six independent bots running concurrently against a single Topstep account, with policy-aware risk gating, a cross-bot account-cap allocator, and a live trader-grade React dashboard.
 
 The product is the fleet: SurgeBot (NQ ORB), PropBot (NQ trend), Lux Bot (external Discord signals), NQ Maintenance (24/7 mean reversion), Gold Bot (GC mean reversion), and ES Scalper (ES mean reversion). Each bot has its own strategy, risk policy, and schedule. The runtime runs all six in one `asyncio.gather`, exposes a side-car dashboard, and writes per-bot SQLite journals for end-of-day reconcile.
 
@@ -18,11 +18,14 @@ python -m bot.runtime --bots config/bots/ --check
 # Run the suite (~990 tests)
 pytest -q
 
+# Build the React dashboard once (re-run after frontend changes)
+cd dashboard-ui && pnpm install && pnpm build && cd ..
+
 # Boot the fleet with the dashboard (sim broker — no Topstep deps)
 python -m bot.runtime --bots config/bots/ --dashboard
 ```
 
-The dashboard binds to `127.0.0.1:8765`. Override with `--dashboard-port 9090`. Larger accounts override the fleet-wide position cap with `--account-max-mini 15` (default 5 = Topstep $50K Combine; $100K = 10, $150K = 15).
+Open `http://127.0.0.1:8765/` for the live React dashboard: per-bot intent ("Watching for ORB breakout > X"), equity curves, kill switch, per-profile parameter overrides, multi-tenant profile switching. REST + WebSocket API under `/api/*` and `/ws`. Legacy server-rendered fleet page still served at `/v1/`. Override the port with `--dashboard-port 9090`. Larger accounts tune the fleet-wide position cap with `--account-max-mini 15` (default 5 = Topstep $50K Combine; $100K = 10, $150K = 15).
 
 ## The 4-rail test ladder
 
@@ -38,14 +41,15 @@ See [`ONBOARDING.md`](./ONBOARDING.md) for the full operator playbook, including
 ## What's where
 
 - `src/bot/` — runtime source.
+- `dashboard-ui/` — React + Vite + shadcn/ui frontend (Plan 23). Builds to `src/bot/dashboard/v2/static/dist/`.
 - `config/bots/*.yml` — the six bot specs.
-- `tests/` — ~990 tests (unit + integration; the full-fleet smoke test is `tests/integration/test_full_fleet_smoke.py`).
-- `docs/superpowers/specs/2026-05-22-futures-bot/` — the architecture spec (11 documents).
-- `docs/superpowers/plans/` — 22 chronological implementation plans.
+- `tests/` — ~1080 tests (unit + integration; the full-fleet smoke test is `tests/integration/test_full_fleet_smoke.py`).
+- `docs/superpowers/specs/2026-05-22-futures-bot/` — the architecture spec (12 documents).
+- `docs/superpowers/plans/` — chronological implementation plans (1 - 23).
 
 ## Project state (2026-05-24)
 
-22 implementation plans landed and tagged. 992 tests passing. Six bots configured (one currently `enabled: true` by default — PropBot, the EFA-account trend bot; the rest ship disabled and require explicit operator opt-in via `enabled: true`). Hard-flat behaviour is policy-driven (Combine enforces 15:10 CT; EFA does not). The cross-bot `FleetAllocator` caps account-wide exposure; the `--account-max-mini` CLI flag tunes it per Topstep account size.
+23 implementation plans landed and tagged. 1080+ tests passing. Six bots configured (one currently `enabled: true` by default — PropBot, the EFA-account trend bot; the rest ship disabled and require explicit operator opt-in via `enabled: true`). Hard-flat behaviour is policy-driven (Combine enforces 15:10 CT; EFA does not). The cross-bot `FleetAllocator` caps account-wide exposure; the `--account-max-mini` CLI flag tunes it per Topstep account size. The Plan 23 React dashboard ships per-profile parameter editing, live WebSocket bar/account/intent updates, and a one-click kill switch.
 
 This codebase is genuinely production-ready pending the operator's TopstepX credentials and live authorization.
 

@@ -439,9 +439,31 @@ async def test_prefs_404_for_unknown_profile(state: DashboardState) -> None:
 
 # ---------- SPA mount ------------------------------------------------------
 
-async def test_spa_root_serves_index_html(state: DashboardState) -> None:
+
+def _make_state_with_spa_dist(
+    state: DashboardState, tmp_path: Path,
+) -> DashboardState:
+    """Build a DashboardState pointing at a synthetic SPA dist dir.
+
+    Keeps the tests independent of `dashboard-ui/dist/` having been
+    built locally (the dist is .gitignored).
+    """
+    from dataclasses import replace
+    dist = tmp_path / "spa_dist"
+    dist.mkdir()
+    (dist / "index.html").write_text(
+        '<!doctype html><html><body><div id="root"></div></body></html>',
+        encoding="utf-8",
+    )
+    return replace(state, spa_dist_dir=dist)
+
+
+async def test_spa_root_serves_index_html(
+    state: DashboardState, tmp_path: Path,
+) -> None:
     """When the SPA dist exists, `/` returns the index containing #root."""
-    app = create_app(state)
+    spa_state = _make_state_with_spa_dist(state, tmp_path)
+    app = create_app(spa_state)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
     ) as client:
@@ -450,10 +472,13 @@ async def test_spa_root_serves_index_html(state: DashboardState) -> None:
     assert 'id="root"' in resp.text
 
 
-async def test_spa_handles_client_side_routes(state: DashboardState) -> None:
+async def test_spa_handles_client_side_routes(
+    state: DashboardState, tmp_path: Path,
+) -> None:
     """SPA client-side routes /bots/<name>, /profiles, /settings all return
     the index so React Router can render them after hydration."""
-    app = create_app(state)
+    spa_state = _make_state_with_spa_dist(state, tmp_path)
+    app = create_app(spa_state)
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test",
     ) as client:
@@ -461,3 +486,25 @@ async def test_spa_handles_client_side_routes(state: DashboardState) -> None:
             resp = await client.get(path)
             assert resp.status_code == 200, path
             assert 'id="root"' in resp.text, path
+
+
+async def test_no_spa_dist_falls_back_to_legacy_at_root(
+    tmp_path: Path,
+) -> None:
+    """Without a built SPA, `/` returns the legacy Jinja fleet page."""
+    from dataclasses import replace
+    bots_dir = tmp_path / "bots"
+    bots_dir.mkdir()
+    (bots_dir / "alpha.yml").write_text(_spec_yaml("alpha", str(tmp_path / "alpha.db")))
+    heartbeat = tmp_path / "hb"
+    heartbeat.write_text(datetime(2026, 5, 24, 10, 0, tzinfo=UTC).isoformat())
+    state = DashboardState(bots_dir=bots_dir, heartbeat_path=heartbeat)
+    # Point at a non-existent dist path so the fallback path is taken.
+    state = replace(state, spa_dist_dir=tmp_path / "does-not-exist")
+    app = create_app(state)
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        resp = await client.get("/")
+    assert resp.status_code == 200
+    assert "alpha" in resp.text  # Jinja-rendered fleet page
