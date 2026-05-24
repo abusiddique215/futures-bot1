@@ -1,0 +1,23 @@
+# PropBot — NQ Trend (EMA-pullback) — funded-account profile.
+# Second user-facing bot (Plan 16). EFA Standard EoD-trailing MLL; flat at
+# 14:30 CT (before the EoD ratchet) to avoid touching trailing limits.
+name: propbot_nq
+enabled: true
+symbol: MNQH26
+strategy_id: trend_ema_pullback
+strategy_params:
+  symbol: MNQH26     # match BotSpec.symbol so emitted intents tag the gate-bound contract
+  fast_ema: 20
+  slow_ema: 50
+  pullback_atr_mult: 0.5
+  reward_ratio: 1.5
+  max_trades_per_day: 1
+  session_end_ct: "14:30"   # mirror schedule_params.close_ct — EoD flat happens at the strategy layer
+risk_policy: efa_standard
+risk_params:
+  mll_amount: 2000
+schedule_type: market_hours
+schedule_params:
+  open_ct: "09:00"   # later than SurgeBot — avoid opening volatility
+  close_ct: "14:30"  # earlier exit — funded-account conservatism
+journal_path: state/journal_propbot_nq.db
