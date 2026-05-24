@@ -1,0 +1,36 @@
+# NQ Maintenance — 24/7 live-account-only bot.
+#
+# Source: VSL caption at ~23:00, verbatim — "The live only maintenance
+# systems trade automatically 24/7." Conservative, low-frequency tuning of
+# `MeanReversionStrategy`: wide Bollinger bands (period 50, 3 sigma),
+# extreme-RSI entries (20/80), small TP (reward_ratio 0.5), and a hard cap
+# of two entries per Topstep trading day.
+#
+# WILL REFUSE TO BOOT against a Combine account — Topstep Combine requires a
+# 15:10 CT hard-flat that's incompatible with a 24/7 schedule. The
+# `LiveOnlyGuard` in `bot.runtime.fleet.live_only_guard` raises
+# `IncompatibleBotSpecError` at `BotRegistry.build` time. Use efa_standard
+# (this file) for any funded / EFA account.
+#
+# Ships DISABLED — the operator opts in only after passing Combine and
+# moving the account to EFA. Set `enabled: true` to participate in the
+# fleet.
+name: nq_maintenance
+enabled: false
+symbol: MNQH26
+strategy_id: mean_reversion_bb
+strategy_params:
+  bb_period: 50
+  bb_stddev: 3.0
+  rsi_period: 21
+  rsi_oversold: 20.0
+  rsi_overbought: 80.0
+  reward_ratio: 0.5
+  max_trades_per_day: 2
+  symbol: MNQH26
+risk_policy: efa_standard
+risk_params:
+  mll_amount: 2000
+schedule_type: always
+schedule_params: {}
+journal_path: state/journal_nq_maintenance.db
