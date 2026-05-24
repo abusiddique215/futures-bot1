@@ -67,6 +67,10 @@ filterwarnings = [
     # interpreter shutdown. We can't fix third-party teardown; treat as warn-only.
     "ignore::DeprecationWarning:uvloop",
     "ignore::DeprecationWarning:project_x_py.*",
+    # uvicorn/websockets 13.x compat: uvicorn passes a 2-arg ws_handler that
+    # websockets.legacy deprecated. Upstream uvicorn fix is in 0.30+ branch but
+    # the warning fires on every WS connect under our pinned versions.
+    "ignore::DeprecationWarning:websockets.legacy.*",
     "ignore::pytest.PytestUnraisableExceptionWarning",
     "ignore::ResourceWarning",
 ]
