@@ -35,7 +35,7 @@ from bot.runtime.bar_source import LiveBarSource
 from bot.runtime.fleet.allocator import FleetAllocator
 from bot.runtime.fleet.schedule import AlwaysOn, Schedule
 from bot.runtime.heartbeat import Heartbeat
-from bot.types import ApprovedOrder
+from bot.types import AccountState, ApprovedOrder, Bar
 
 
 class _Telemetry(Protocol):
@@ -83,6 +83,123 @@ class LiveTradingLoop:
                 "LiveTradingLoop: allocator requires bot_name + fleet_positions_fn",
             )
 
+    def _bot_label(self) -> str:
+        """Stable identity for telemetry events. Falls back to symbol."""
+        return self._bot_name or self._symbol
+
+    def _bot_state(self, state: AccountState) -> str:
+        """Derived bot-lifecycle state used in account_update events.
+
+        DISABLED       — gate has permanently disabled the strategy (post-flatten).
+        IN_TRADE       — at least one contract open on the bot's symbol.
+        ARMED_WAITING  — enabled, no position, ready for entry.
+        """
+        if getattr(self._gate, "_strategy_disabled", False):
+            return "DISABLED"
+        # Bot is in a trade if there's any open contract on its symbol.
+        for sym, qty in state.open_positions.items():
+            if qty != 0 and (sym == self._symbol or sym.startswith(self._symbol)):
+                return "IN_TRADE"
+        return "ARMED_WAITING"
+
+    def _emit_per_bar_events(self, bar: Bar, state: AccountState) -> None:
+        """Publish bar_tick + account_update + bot_intent for this bar.
+
+        Distance fields are computed here so the dashboard never reaches
+        into the policy. Errors during emit are intentionally not caught —
+        TelemetryBus already isolates sink failures, and a bug in our
+        emit path should fail loudly in tests.
+        """
+        # bar_tick
+        self._telemetry.alert(
+            "bar_tick",
+            bot=self._bot_label(),
+            symbol=bar.symbol,
+            bar={
+                "ts": bar.timestamp,
+                "o": bar.open, "h": bar.high, "low": bar.low,
+                "c": bar.close, "v": bar.volume,
+            },
+        )
+        # account_update with derived risk-header fields.
+        policy = self._gate.policy
+        phantom = policy.phantom_mll(state)
+        distance_to_mll = state.equity - phantom
+        # distance_to_target is Combine-only ($3K pass threshold for $50K).
+        if state.is_combine:
+            target = state.start_balance + self._gate._PROFIT_TARGET_50K
+            distance_to_target: float | None = target - state.equity
+        else:
+            distance_to_target = None
+        contracts_open = sum(abs(q) for q in state.open_positions.values())
+        # Topstep DLL = $1000 cap on realized loss in a single day.
+        dll_remaining = max(0.0, self._gate._DLL_AMOUNT - max(
+            0.0, -state.realized_pnl_today,
+        ))
+        self._telemetry.alert(
+            "account_update",
+            bot=self._bot_label(),
+            state=self._bot_state(state),
+            equity=state.equity,
+            balance=state.start_balance,
+            realized_pnl_today=state.realized_pnl_today,
+            unrealized_pnl=state.unrealized_pnl,
+            high_water=state.high_water_equity,
+            distance_to_mll=distance_to_mll,
+            distance_to_target=distance_to_target,
+            contracts_open=contracts_open,
+            dll_remaining=dll_remaining,
+        )
+        # bot_intent — extracted from the strategy + schedule. Imported
+        # lazily so live_loop doesn't take a dashboard dependency at import
+        # time (keeps the runtime install minimal if dashboard ever splits).
+        from bot.dashboard.v2.intent import extract_intent
+        try:
+            intent_payload = extract_intent(
+                self._strategy, bar,
+                {
+                    "equity": state.equity,
+                    "open_positions": dict(state.open_positions),
+                    "high_water_equity": state.high_water_equity,
+                },
+                schedule=self._schedule,
+                now=bar.timestamp,
+            )
+        except Exception:  # pragma: no cover — defensive
+            intent_payload = {
+                "watching_for": "Watching for entry signal",
+                "schedule_open": self._schedule.should_trade(bar.timestamp),
+                "next_window_opens_in_seconds": None,
+                "max_trades_remaining": None,
+            }
+        self._telemetry.alert(
+            "bot_intent",
+            bot=self._bot_label(),
+            **intent_payload,
+        )
+
+    def _emit_fill_event(
+        self,
+        intent: object,
+        fill_price: float,
+        timestamp: object,
+    ) -> None:
+        # `intent` is an OrderIntent; declared `object` to avoid widening the
+        # signature beyond what the caller already has.
+        from bot.types import OrderIntent
+        if not isinstance(intent, OrderIntent):
+            return  # defensive — caller always passes OrderIntent
+        self._telemetry.alert(
+            "fill",
+            bot=self._bot_label(),
+            symbol=intent.symbol,
+            side=intent.side,
+            quantity=intent.quantity,
+            fill_price=fill_price,
+            timestamp=timestamp,
+            client_order_id=intent.client_order_id,
+        )
+
     async def run(
         self,
         bar_source: LiveBarSource,
@@ -124,6 +241,10 @@ class LiveTradingLoop:
             if not self._schedule.should_trade(bar.timestamp):
                 final_state = self._tracker.snapshot(timestamp=bar.timestamp)
                 await self._journal.record_equity_snapshot(final_state)
+                # Plan 23 T3: dashboards want bar/account/intent events even
+                # outside the trading window — operators need to see the bot
+                # is alive + see "next window in N seconds".
+                self._emit_per_bar_events(bar, final_state)
                 if self._heartbeat.should_write_at(bar.timestamp):
                     self._heartbeat.write_now(bar.timestamp)
                 bars_seen += 1
@@ -164,6 +285,11 @@ class LiveTradingLoop:
                         fill_price=bar.close,
                         ts=bar.timestamp,
                     )
+                    # Plan 23 T3: publish a `fill` event for the dashboard's
+                    # live trade-log panel. Always references bar.close to
+                    # match the sim fill above; the broker's actual fill
+                    # price would be wired here for live mode.
+                    self._emit_fill_event(approved, bar.close, bar.timestamp)
                     # Plan 21: settle the allocator pending slot now that the
                     # fill is reflected in the tracker. Next allocator call
                     # will see the settled position via fleet_positions_fn.
@@ -185,6 +311,9 @@ class LiveTradingLoop:
             # 7. Equity snapshot at the end of the bar.
             final_state = self._tracker.snapshot(timestamp=bar.timestamp)
             await self._journal.record_equity_snapshot(final_state)
+
+            # 7b. Plan 23 T3: per-bar telemetry for the v2 dashboard.
+            self._emit_per_bar_events(bar, final_state)
 
             # 8. Heartbeat — first bar always writes; subsequent writes
             #    gated at 30s.

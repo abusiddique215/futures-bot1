@@ -251,8 +251,24 @@ class BotRegistry:
     def register_schedule(self, sid: str, factory: ScheduleFactory) -> None:
         self._schedules[sid] = factory
 
-    def build(self, spec: BotSpec, *, broker: ExecutionClient) -> ResolvedBot:
-        """Resolve the spec into live components wired to the shared broker."""
+    def build(
+        self,
+        spec: BotSpec,
+        *,
+        broker: ExecutionClient,
+        profile_overlay: dict[str, Any] | None = None,
+    ) -> ResolvedBot:
+        """Resolve the spec into live components wired to the shared broker.
+
+        `profile_overlay` (Plan 23): when set, deep-merged into
+        `strategy_params/risk_params/schedule_params` before factory lookup
+        so per-user customization takes effect without touching the YAML.
+        """
+        if profile_overlay:
+            # Lazy import — bot.dashboard.v2 has no other runtime imports and
+            # we want to keep BotRegistry's module-level import graph minimal.
+            from bot.dashboard.v2.profiles import ProfileOverlay
+            spec = ProfileOverlay.apply(spec, profile_overlay)
         if spec.strategy_id not in self._strategies:
             raise KeyError(f"unknown strategy_id: {spec.strategy_id!r}")
         if spec.risk_policy not in self._policies:

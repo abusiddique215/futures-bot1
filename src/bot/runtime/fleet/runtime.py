@@ -82,6 +82,7 @@ class FleetRuntime:
         allocator: FleetAllocator | None = None,
         dashboard_port: int | None = None,
         dashboard_bots_dir: Path | None = None,
+        dashboard_state_root: Path | None = None,
     ) -> None:
         self._bots = bots
         self._broker = broker
@@ -97,6 +98,9 @@ class FleetRuntime:
         self._dashboard_port = dashboard_port
         self._dashboard_host = "127.0.0.1"
         self._dashboard_bots_dir = dashboard_bots_dir
+        # Plan 23: state root for ProfileStore. Defaults to "state" so the
+        # default install gets per-user profiles under state/profiles/.
+        self._dashboard_state_root = dashboard_state_root
         self._dashboard_server: uvicorn.Server | None = None
         # Shutdown signal that the fleet propagates to every LiveTradingLoop.
         self._stop_event: asyncio.Event | None = None
@@ -181,7 +185,11 @@ class FleetRuntime:
                     symbol=bot.spec.symbol,
                     schedule=bot.schedule,
                     allocator=self._allocator,
-                    bot_name=bot.name if self._allocator is not None else None,
+                    # Plan 23 T3: bot_name is also used to label per-bar
+                    # telemetry events. Pass it unconditionally so dashboard
+                    # events carry a stable identity, even when the allocator
+                    # isn't wired.
+                    bot_name=bot.name,
                     fleet_positions_fn=(
                         _fleet_positions if self._allocator is not None else None
                     ),
@@ -249,10 +257,30 @@ class FleetRuntime:
 
         The server task is wrapped so an exception inside uvicorn doesn't
         crash the fleet — we log and continue.
+
+        Plan 23: when the telemetry is a real TelemetryBus, wire the v2
+        surface — broadcaster (subscribed to the bus) + ProfileStore. Tests
+        that pass a Noop telemetry still get the legacy v1 dashboard. The
+        v2 dashboard ALWAYS gets the ProfileStore (no bus dependency for
+        REST profile CRUD), so the frontend can manage profiles even if
+        the telemetry is noop.
         """
+        from bot.dashboard.v2.profiles import ProfileStore
+        from bot.dashboard.v2.ws_bridge import WebSocketBroadcaster
+        from bot.observability.bus import TelemetryBus
+
         bots_dir = self._dashboard_bots_dir or Path("config/bots")
+        state_root = self._dashboard_state_root or Path("state")
+        profile_store = ProfileStore(state_root / "profiles")
+        broadcaster: WebSocketBroadcaster | None = None
+        bus_arg: TelemetryBus | None = None
+        if isinstance(self._telemetry, TelemetryBus):
+            broadcaster = WebSocketBroadcaster()
+            self._telemetry.subscribe(broadcaster)
+            bus_arg = self._telemetry
         state = DashboardState(
             bots_dir=bots_dir, heartbeat_path=self._heartbeat_path,
+            bus=bus_arg, profile_store=profile_store, broadcaster=broadcaster,
         )
         app = create_app(state)
         config = uvicorn.Config(
