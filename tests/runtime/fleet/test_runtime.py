@@ -140,6 +140,43 @@ async def test_empty_bot_list_returns_empty_dict(tmp_path: Path) -> None:
     assert results == {}
 
 
+async def test_tracker_start_balance_from_risk_params(tmp_path: Path) -> None:
+    """A $100K Combine bot's tracker must reflect risk_params.start_balance,
+    not the FleetRuntime default. The first equity snapshot's `start_balance`
+    field is the public signal."""
+    sim = SimExecutionClient()
+    await sim.connect()
+    reg = BotRegistry()
+    reg.register_strategy("orb_5m", lambda p: _NoopStrategy())
+    spec = BotSpec(
+        name="big",
+        enabled=True, symbol="MNQ",
+        strategy_id="orb_5m", strategy_params={},
+        risk_policy="combine_intraday",
+        risk_params={"start_balance": 100_000, "mll_amount": 3_000, "max_mini": 10},
+        schedule_type="always", schedule_params={},
+        journal_path=tmp_path / "big.db",
+    )
+    resolved = reg.build(spec, broker=sim)
+    fleet = FleetRuntime(
+        bots=[resolved], broker=sim,
+        bar_source_factory=lambda s: _StaticSource(_bars(1)),
+        telemetry=NoopTelemetryBus(),
+        heartbeat_path=tmp_path / "hb",
+    )
+    await fleet.run()
+
+    from bot.journal.journal import Journal
+    j = await Journal.connect(str(spec.journal_path))
+    snap = await j.get_last_equity_snapshot()
+    await j.close()
+    assert snap is not None
+    # equity = start_balance + realized + unrealized. With no trades at bar 0,
+    # equity reflects the tracker's start_balance — the test signal we need.
+    assert snap.equity == 100_000.0
+    assert snap.high_water_equity == 100_000.0
+
+
 async def test_results_have_bot_result_type(tmp_path: Path) -> None:
     sim = SimExecutionClient()
     await sim.connect()

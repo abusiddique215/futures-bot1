@@ -93,8 +93,14 @@ class FleetRuntime:
                 source = _CountingBarSource(self._bar_source_factory(bot.spec))
                 sources.append(source)
 
+                # start_balance must match the policy's start_balance — they
+                # both drive phantom-MLL math. Pulled from the spec's risk_params
+                # so a $100K Combine bot doesn't disagree with its own gate.
+                start_balance = float(
+                    bot.spec.risk_params.get("start_balance", 50_000.0)
+                )
                 tracker = AccountStateTracker(
-                    start_balance=50_000.0,
+                    start_balance=start_balance,
                     is_combine=bot.spec.risk_policy == "combine_intraday",
                 )
                 loop = LiveTradingLoop(
