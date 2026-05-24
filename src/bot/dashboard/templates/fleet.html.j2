@@ -1,0 +1,41 @@
+{% extends "base.html.j2" %}
+{% block title %}Fleet - Topstep Bots{% endblock %}
+{% block content %}
+<h1>Topstep Fleet</h1>
+<div class="meta">
+  {% if heartbeat %}
+    Fleet heartbeat: {{ heartbeat.isoformat() }}
+    ({{ "%.1f"|format(heartbeat_age) }}s ago)
+  {% else %}
+    No heartbeat yet.
+  {% endif %}
+  &middot; auto-refresh every {{ refresh_seconds }}s
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Bot</th>
+      <th>Symbol</th>
+      <th>Enabled</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for bot in bots %}
+    <tr class="{% if not bot.enabled %}disabled{% endif %}">
+      <td><a href="/bots/{{ bot.name }}">{{ bot.name }}</a></td>
+      <td>{{ bot.symbol }}</td>
+      <td>
+        <span class="badge {% if bot.enabled %}enabled{% else %}disabled{% endif %}">
+          {{ "yes" if bot.enabled else "no" }}
+        </span>
+      </td>
+      <td>
+        <span class="badge {{ bot.status }}">{{ bot.status }}</span>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

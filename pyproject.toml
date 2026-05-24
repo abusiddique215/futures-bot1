@@ -30,6 +30,9 @@ dependencies = [
     "jinja2>=3.1",                    # HTML report template rendering
     # Plan 19 deps (Lux Bot — Discord signal ingestion)
     "discord.py>=2.4,<3.0",           # canonical async Discord client (mock-able for tests)
+    # Plan 21 deps (dashboard — local FastAPI + uvicorn side-car)
+    "fastapi>=0.115",                 # ASGI app surface for the read-only dashboard
+    "uvicorn>=0.30",                  # ASGI server for the side-car HTTP task
 ]
 
 [project.optional-dependencies]
@@ -49,6 +52,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "bot.proof" = ["templates/*.j2"]
+"bot.dashboard" = ["templates/*.j2", "static/*"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
