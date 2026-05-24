@@ -27,13 +27,28 @@ def test_drawdown_policy_protocol_has_expected_methods() -> None:
     assert not missing, f"Protocol missing methods: {missing}"
 
 
+def test_drawdown_policy_protocol_has_enforces_hard_flat() -> None:
+    """Plan 22 T1 — `enforces_hard_flat` is a class-level attribute on the
+    Protocol (ClassVar[bool]). Lives in __annotations__ rather than dir()
+    because Protocol attributes are declarations, not runtime members.
+    """
+    from bot.risk.policies import DrawdownPolicy
+    assert "enforces_hard_flat" in DrawdownPolicy.__annotations__
+
+
 def test_dummy_policy_satisfies_protocol(utc_now) -> None:
     """Trivial policy where the floor is fixed at start_balance - MLL.
     Validates the Protocol's shape; not real risk-engine logic."""
+    from typing import ClassVar
+
     from bot.risk.policies import DrawdownPolicy
     from bot.types import AccountState
 
     class _NoopPolicy:
+        # Plan 22 T1: class-level attribute, matches Combine semantics for
+        # this stub.
+        enforces_hard_flat: ClassVar[bool] = True
+
         def phantom_mll(self, state: AccountState) -> float:
             return state.start_balance - 2_000.0
         def is_locked(self, state: AccountState) -> bool:

@@ -10,6 +10,7 @@ event loop / fleet `.run()`.
 Usage:
   python -m bot.runtime --config config/bot.example.yml
   python -m bot.runtime --bots   config/bots/ --check
+  python -m bot.runtime --bots   config/bots/ --account-max-mini 15
 """
 from __future__ import annotations
 
@@ -18,6 +19,27 @@ from pathlib import Path
 
 from bot.runtime.main import main as _runtime_main
 from bot.runtime.main import run_fleet as _runtime_fleet
+
+
+def _positive_int(value: str) -> int:
+    """argparse type: parse `value` as an int and require it to be > 0.
+
+    Plan 22 T2 — `--account-max-mini` must be a positive integer. Argparse's
+    bare `type=int` accepts 0 and negatives; this wrapper rejects both so
+    the CLI fails loudly at parse time rather than at allocator-construction
+    time deep inside run_fleet.
+    """
+    try:
+        n = int(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(
+            f"expected a positive integer, got {value!r}",
+        ) from e
+    if n <= 0:
+        raise argparse.ArgumentTypeError(
+            f"must be > 0, got {n}",
+        )
+    return n
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +79,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=8765,
         help="Port for --dashboard. Default 8765.",
     )
+    # Plan 22 T2: cross-bot account cap. Default 5 = Topstep $50K Combine
+    # cap. $100K = 10, $150K = 15. Per-bot risk_params.max_mini still applies
+    # via the bot's own gate; this is the FLEET-WIDE shared-account cap.
+    p.add_argument(
+        "--account-max-mini",
+        type=_positive_int,
+        default=5,
+        help="Account-wide max minis across all bots (FleetAllocator). "
+             "Default 5 (Topstep $50K Combine). $100K=10, $150K=15.",
+    )
     return p
 
 
@@ -69,6 +101,7 @@ async def cli_main(argv: list[str] | None = None) -> int:
             check_only=args.check,
             dashboard_enabled=args.dashboard,
             dashboard_port=args.dashboard_port,
+            account_max_mini=args.account_max_mini,
         )
     if args.dashboard:
         # Single-bot mode (--config) doesn't run the fleet dashboard. Be

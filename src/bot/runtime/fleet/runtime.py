@@ -187,7 +187,7 @@ class FleetRuntime:
                     ),
                 )
                 tasks.append(asyncio.create_task(
-                    loop.run(source, stop_event=self._stop_event),
+                    self._run_one(bot, loop, source),
                     name=bot.name,
                 ))
 
@@ -217,6 +217,32 @@ class FleetRuntime:
                     # Best-effort cleanup; per-bot failures shouldn't block
                     # the others from closing.
                     pass
+
+    async def _run_one(
+        self, bot: ResolvedBot, loop: LiveTradingLoop, source: _CountingBarSource,
+    ) -> None:
+        """Per-bot wrapper: run the loop, then ALWAYS call teardown.
+
+        Plan 22 T3: teardown() is the symmetric counterpart to setup(). It
+        runs in a `finally` block so it fires whether the loop completed
+        normally, the fleet requested shutdown, or the loop raised. A
+        teardown exception is logged + swallowed so a misbehaving bot
+        cleanup cannot crash the rest of the fleet.
+
+        The strategy may not define teardown (the Plan 11 strategies don't);
+        hasattr() preserves the Protocol's "on_bar is the only required
+        method" contract.
+        """
+        try:
+            await loop.run(source, stop_event=self._stop_event)
+        finally:
+            if hasattr(bot.strategy, "teardown"):
+                try:
+                    result = bot.strategy.teardown()
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as e:
+                    log.warning("teardown failed for bot %s: %s", bot.name, e)
 
     def _launch_dashboard(self) -> asyncio.Task[None]:
         """Create the FastAPI app + uvicorn.Server and spawn its serve() task.
