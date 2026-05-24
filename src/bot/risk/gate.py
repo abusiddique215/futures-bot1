@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import ClassVar, Protocol, runtime_checkable
 
 from bot.execution.ports import ExecutionClient
+from bot.markets.registry import get_market
 from bot.observability.bus import NoopTelemetryBus
 from bot.risk.cancel_tracker import RollingRatioTracker
 from bot.risk.config import RiskConfig
@@ -62,7 +63,10 @@ class _NoopJournalProvider:
 class TopstepRiskGate:
     """Pre-trade rule check + tick-driven state updates + force-flatten triggers."""
 
-    _TICK_VALUES: ClassVar[dict[str, float]] = {"MNQ": 0.50, "NQ": 5.00}
+    # Plan 14: tick values come from `bot.markets.registry` via `_tick_value()`
+    # so every market in the registry (NQ/MNQ/GC/MGC/ES/MES today) is supported
+    # automatically. KeyError from get_market(...) propagates — failing loud on
+    # an unregistered symbol is intentional (silent default would be a footgun).
     _DLL_AMOUNT: ClassVar[float] = 1_000.0
     _PROFIT_TARGET_50K: ClassVar[float] = 3_000.0  # Combine $50K pass threshold
 
@@ -155,7 +159,7 @@ class TopstepRiskGate:
                 intent=intent, state_snapshot=state, timestamp=state.timestamp,
             )
         phantom = self.policy.phantom_mll(state)
-        per_tick_dollars = self._TICK_VALUES[intent.symbol] * abs(intent.quantity)
+        per_tick_dollars = self._tick_value(intent.symbol) * abs(intent.quantity)
         if per_tick_dollars <= 0:
             return ApprovedOrder(
                 intent=intent, state_snapshot=state, timestamp=state.timestamp,
@@ -202,12 +206,21 @@ class TopstepRiskGate:
                 )
         return None
 
+    @staticmethod
+    def _tick_value(symbol: str) -> float:
+        """Look up a market's tick value via `bot.markets.registry`.
+
+        Static so callers can use it without a self-reference; raises KeyError
+        on an unregistered symbol (deliberate — see class docstring).
+        """
+        return get_market(symbol).tick_value
+
     def _worst_case_loss(self, intent: OrderIntent) -> float:
         """stop_distance_ticks * tick_value * qty."""
         if intent.bracket is None:
             return 0.0
         return (intent.bracket.stop_loss_ticks
-                * self._TICK_VALUES[intent.symbol]
+                * self._tick_value(intent.symbol)
                 * abs(intent.quantity))
 
     def _check_dll(

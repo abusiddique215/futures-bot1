@@ -131,3 +131,50 @@ def test_efa_consistency_check_fails_when_over_40pct() -> None:
     p = EFAConsistencyDrawdown(mll_amount=2_000)
     # best_day = 500, net_profit = 1_000 -> 50% -> fails
     assert p.gate_payout(best_day=500, net_profit=1_000) is False
+
+
+# Plan 14: extend coverage to GC/MGC and ES/MES via the registry.
+@pytest.mark.parametrize(
+    ("symbol", "expected_cap"),
+    [
+        # tier 1 (profit < 1500) -> 2 mini-equivalent
+        ("NQ",  2),
+        ("MNQ", 20),
+        ("ES",  2),
+        ("MES", 20),
+        ("GC",  2),
+        ("MGC", 20),
+    ],
+)
+def test_efa_max_position_tier1_per_market(symbol: str, expected_cap: int) -> None:
+    from bot.risk.efa_drawdown import EFAStandardEoDDrawdown
+    p = EFAStandardEoDDrawdown(mll_amount=2_000)
+    s = _state(equity=51_000)  # profit = 1_000 -> tier 1
+    assert p.max_position(symbol, s) == expected_cap
+
+
+@pytest.mark.parametrize(
+    ("symbol", "expected_cap"),
+    [
+        ("NQ",  5),
+        ("MNQ", 50),
+        ("ES",  5),
+        ("MES", 50),
+        ("GC",  5),
+        ("MGC", 50),
+    ],
+)
+def test_efa_max_position_tier3_per_market(symbol: str, expected_cap: int) -> None:
+    from bot.risk.efa_drawdown import EFAStandardEoDDrawdown
+    p = EFAStandardEoDDrawdown(mll_amount=2_000)
+    s = _state(equity=52_000)  # profit = 2_000 -> tier 3
+    assert p.max_position(symbol, s) == expected_cap
+
+
+def test_efa_max_position_unknown_symbol_raises() -> None:
+    """Symbol with no registered MarketSpec -> ValueError (CL is out of scope)."""
+    from bot.risk.efa_drawdown import EFAStandardEoDDrawdown
+    p = EFAStandardEoDDrawdown(mll_amount=2_000)
+    s = _state(equity=51_000)
+    with pytest.raises(ValueError, match="Unsupported symbol"):
+        p.max_position("CL", s)

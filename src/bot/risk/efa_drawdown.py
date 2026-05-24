@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from bot.markets.registry import get_market, is_micro
 from bot.types import AccountState
 
 
@@ -66,11 +67,16 @@ class EFAStandardEoDDrawdown:
             cap_mini = 3
         else:
             cap_mini = 5
-        if symbol.startswith("MNQ"):
-            return cap_mini * 10
-        if symbol.startswith("NQ"):
-            return cap_mini
-        raise ValueError(f"Unsupported symbol for Topstep: {symbol}")
+        # Plan 14: replace symbol startswith chain with registry lookup so any
+        # market in `bot.markets.MARKETS` (NQ/MNQ/GC/MGC/ES/MES today) gets the
+        # right cap with no per-symbol branching here.
+        try:
+            market = get_market(symbol)
+        except KeyError as e:
+            raise ValueError(f"Unsupported symbol for Topstep: {symbol}") from e
+        if is_micro(symbol):
+            return cap_mini * market.micro_to_full_ratio
+        return cap_mini
 
 
 class EFAConsistencyDrawdown(EFAStandardEoDDrawdown):

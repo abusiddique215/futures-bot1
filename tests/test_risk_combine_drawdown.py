@@ -83,11 +83,40 @@ def test_max_position_nq_is_max_mini() -> None:
 
 
 def test_max_position_unknown_symbol_raises() -> None:
+    """Symbol that has no registered MarketSpec raises ValueError.
+
+    Plan 14: ES/GC and their micros are now registered, so this regression
+    test uses CL (crude oil — not in scope) to keep exercising the unknown-
+    symbol path.
+    """
     from bot.risk.combine_drawdown import CombineIntradayDrawdown
     p = CombineIntradayDrawdown(start_balance=50_000, mll_amount=2_000, max_mini=5)
     s = _state(equity=50_000)
     with pytest.raises(ValueError, match="Unsupported symbol"):
-        p.max_position("ES", s)
+        p.max_position("CL", s)
+
+
+# Plan 14: registry-driven multi-market support. NQ/MNQ rows are the original
+# regression cases (kept above); ES/MES/GC/MGC verify the registry lookup.
+@pytest.mark.parametrize(
+    ("symbol", "expected_cap"),
+    [
+        ("NQ",  5),
+        ("MNQ", 50),
+        ("ES",  5),
+        ("MES", 50),
+        ("GC",  5),
+        ("MGC", 50),
+        # IB / TopstepX format with month-year suffix also resolves correctly.
+        ("NQH26",  5),
+        ("MGCG26", 50),
+    ],
+)
+def test_max_position_per_market(symbol: str, expected_cap: int) -> None:
+    from bot.risk.combine_drawdown import CombineIntradayDrawdown
+    p = CombineIntradayDrawdown(start_balance=50_000, mll_amount=2_000, max_mini=5)
+    s = _state(equity=50_000)
+    assert p.max_position(symbol, s) == expected_cap
 
 
 def test_update_on_eod_is_noop_for_combine() -> None:
