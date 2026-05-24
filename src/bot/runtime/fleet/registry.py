@@ -32,6 +32,7 @@ from bot.runtime.fleet.spec import BotSpec
 from bot.strategy.mean_reversion import MeanReversionStrategy
 from bot.strategy.orb import OpeningRangeBreakoutStrategy, ORBProfile
 from bot.strategy.profiles.propbot import PROPBOT_DEFAULTS
+from bot.strategy.tiered_sizing import TieredSizingDecorator
 from bot.strategy.trend_following import TrendFollowingStrategy
 
 _CT: Final[ZoneInfo] = ZoneInfo("America/Chicago")
@@ -90,6 +91,20 @@ def _build_mean_reversion(params: dict[str, Any]) -> Strategy:
     return MeanReversionStrategy(**params)
 
 
+def _build_orb_5m_tiered(params: dict[str, Any]) -> Strategy:
+    """Compose `OpeningRangeBreakoutStrategy` + `TieredSizingDecorator`.
+
+    Params shape:
+      {
+        "strategy": <ORBProfile fields>,
+        "tiered":   {"tier_breakpoints": [...], "symbol": "..."},
+      }
+    """
+    inner = OpeningRangeBreakoutStrategy(ORBProfile.model_validate(params["strategy"]))
+    tiered = dict(params.get("tiered") or {})
+    return TieredSizingDecorator(inner=inner, **tiered)
+
+
 def _build_market_hours(params: dict[str, Any]) -> Schedule:
     open_ct = _parse_time(params.get("open_ct", time(8, 30)))
     close_ct = _parse_time(params.get("close_ct", time(15, 10)))
@@ -121,6 +136,7 @@ class BotRegistry:
 
     def _register_builtins(self) -> None:
         self.register_strategy("orb_5m", _build_orb)
+        self.register_strategy("orb_5m_tiered", _build_orb_5m_tiered)
         self.register_strategy("trend_ema_pullback", _build_trend_ema_pullback)
         self.register_strategy("mean_reversion_bb", _build_mean_reversion)
         self.register_risk_policy(

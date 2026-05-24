@@ -1,0 +1,38 @@
+# SurgeBot — NQ Daily Exit, Voodoo Tiered sizing, Combine-aggressive risk.
+# Plan 15. See docs/superpowers/specs/2026-05-22-futures-bot/03-strategies.md.
+#
+# Disabled by default; flip `enabled: true` once the bot is approved for the
+# live fleet.
+#
+# `symbol: MNQ` mirrors the existing example bot — uses the registry root,
+# not a contract-coded "MNQH26". Plan 14's MarketSpec + the data layer
+# resolve the active contract for live + backtest reads.
+name: surgebot_nq
+enabled: false
+symbol: MNQ
+strategy_id: orb_5m_tiered
+strategy_params:
+  strategy:
+    symbol: MNQ
+    range_minutes: 5
+    atr_mult: 1.0
+    tp_r_multiple: 2.0
+    max_trades_per_day: 2
+  tiered:
+    symbol: MNQ
+    tier_breakpoints:
+      - [0, 1]
+      - [500, 2]
+      - [1500, 4]
+      - [2500, 5]
+risk_policy: combine_intraday
+risk_params:
+  start_balance: 50000
+  mll_amount: 2000
+  max_mini: 5
+schedule_type: market_hours
+schedule_params:
+  open_ct: "08:30"
+  # 10 min before hard-flat (15:10 CT) to give the bot time to flatten clean.
+  close_ct: "15:00"
+journal_path: state/journal_surgebot_nq.db
