@@ -88,7 +88,7 @@ def _build_lux(
     spec = BotSpec(
         name="lux_e2e",
         enabled=True,
-        symbol="MNQ",
+        symbol="MNQH26",
         strategy_id="signal_strategy",
         strategy_params={"max_signals_per_bar": 1},
         risk_policy="efa_standard",
