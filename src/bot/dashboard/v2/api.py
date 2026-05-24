@@ -344,10 +344,10 @@ def build_router() -> APIRouter:
     ) -> ActivateResponse:
         ds = request.app.state.dashboard
         store = _store(request)
-        try:
-            store._require(name)  # validates existence
-        except ProfileNotFoundError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
+        if name not in store.list_profiles():
+            raise HTTPException(
+                status_code=404, detail=f"profile not found: {name!r}",
+            )
         active = store.get_active()
         old_overrides = store.get_overrides(active)
         new_overrides = store.get_overrides(name)
