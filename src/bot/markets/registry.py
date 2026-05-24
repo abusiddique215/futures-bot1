@@ -23,6 +23,7 @@ from bot.markets.spec import MarketSpec
 #   NQ  : https://www.cmegroup.com/markets/equities/nasdaq/e-mini-nasdaq-100.contractSpecs.html
 #   MNQ : https://www.cmegroup.com/markets/equities/nasdaq/micro-e-mini-nasdaq-100.contractSpecs.html
 #   ES  : https://www.cmegroup.com/markets/equities/sp/e-mini-sandp500.contractSpecs.html
+#         (CME uses "sandp500" in the URL slug, not "sp-500")
 #   MES : https://www.cmegroup.com/markets/equities/sp/micro-e-mini-sandp-500.contractSpecs.html
 #   GC  : https://www.cmegroup.com/markets/metals/precious/gold.contractSpecs.html
 #   MGC : https://www.cmegroup.com/markets/metals/precious/e-micro-gold.contractSpecs.html
