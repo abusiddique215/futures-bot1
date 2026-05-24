@@ -170,6 +170,14 @@ python -m bot.runtime --bots config/bots/ --dashboard --check
 two production-quality features the VSL-aligned family needed before
 operators flip `enabled: true` on the YAMLs.
 
+**Operator note — account size**: `run_fleet` hardcodes
+`account_max_mini=5` for the $50K Combine baseline. Operators on
+$100K Combine ($150K) or EFA-funded should thread a different value
+through `FleetAllocator(account_max_mini=...)`; the API supports any
+positive value. The CLI doesn't expose this yet — a single flag would
+need to also re-tune the per-bot YAMLs (start_balance + mll_amount)
+to match, which is bigger than v1's "one flag, one cap" scope.
+
 `--check --dashboard` logs the would-be URL but does NOT bind a port.
 Smoke tests stay portable.
 

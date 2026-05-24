@@ -179,6 +179,10 @@ async def test_dashboard_serves_all_three_routes_with_two_bots(tmp_path: Path) -
     # not a unit test.)
     assert body["heartbeat_age"] is not None
     assert body["heartbeat_age"] >= 0.0
+    # Belt-and-braces: the heartbeat file actually got written by the
+    # live loop's heartbeat writer. tmp_path is fresh, so file
+    # existence is a direct proof the writer fired during this run.
+    assert (tmp_path / "hb").exists(), "fleet must write the heartbeat"
 
 
 async def _wait_for_first_response(client: httpx.AsyncClient) -> None:

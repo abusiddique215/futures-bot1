@@ -52,7 +52,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "bot.proof" = ["templates/*.j2"]
-"bot.dashboard" = ["templates/*.j2", "static/*"]
+"bot.dashboard" = ["templates/*.j2"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
