@@ -52,6 +52,10 @@ class CustomWindows:
 
     Used for bots with multiple intraday sessions (e.g. Gold's seven
     windows around London/NY overlap pockets).
+
+    Overnight-spanning windows (``end < start``, e.g. 23:00 - 01:30) are
+    interpreted as "from start through midnight to end" on the same local
+    clock — required by Gold Bot's Asian session.
     """
 
     windows: list[tuple[time, time]] = field(default_factory=list)
@@ -59,4 +63,12 @@ class CustomWindows:
 
     def should_trade(self, now: datetime) -> bool:
         local = now.astimezone(self.tz).time()
-        return any(start <= local <= end for start, end in self.windows)
+        for start, end in self.windows:
+            if start <= end:
+                if start <= local <= end:
+                    return True
+            else:
+                # Window spans midnight (e.g. 23:00 - 01:30 local).
+                if local >= start or local <= end:
+                    return True
+        return False
