@@ -15,20 +15,22 @@ from datetime import time
 from typing import Final
 from zoneinfo import ZoneInfo
 
-# ---- CME contract specs -----------------------------------------------------
+from bot.markets.registry import MARKETS
 
-# Dollar value of one tick, by symbol.
-# MNQ: 0.25 pt x $2/pt  = $0.50/tick
-# NQ:  0.25 pt x $20/pt = $5.00/tick
+# ---- CME / COMEX contract specs --------------------------------------------
+#
+# Plan 14: TICK_VALUES and MIN_TICK are now thin views over `bot.markets.MARKETS`
+# (the single source of truth). The dict shape is preserved so callers in
+# `bot.backtest.*`, `bot.execution.*`, `bot.strategy.*`, and `bot.risk.gate` keep
+# their `TICK_VALUES[symbol]` access patterns unchanged. To add or modify a
+# market, edit `bot.markets.registry.MARKETS` — never mutate these dicts.
+
 TICK_VALUES: Final[dict[str, float]] = {
-    "MNQ": 0.50,
-    "NQ":  5.00,
+    root: spec.tick_value for root, spec in MARKETS.items()
 }
 
-# Minimum tick size in points.
 MIN_TICK: Final[dict[str, float]] = {
-    "MNQ": 0.25,
-    "NQ":  0.25,
+    root: spec.tick_size for root, spec in MARKETS.items()
 }
 
 

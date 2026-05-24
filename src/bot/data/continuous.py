@@ -1,10 +1,17 @@
-"""ContinuousAdjuster — ratio-adjusted roll for NQ/MNQ futures.
+"""ContinuousAdjuster — ratio-adjusted roll for any registered market.
 
 Spec: 01-data-pipeline.md §3.2.
 
-Roll on the third Friday of each contract month. Scale all OHLC of the
-expiring contract (and recursively all older ones) by C_new/C_old so the
-series equals the front-month price at every seam. Volume is unscaled.
+Originally NQ/MNQ-only. Plan 14: works for every market in
+`bot.markets.registry.MARKETS` (NQ/MNQ/ES/MES/GC/MGC), because the algorithm
+is purely data-driven from the per-contract parquet seams; the calendar
+function (`bot.data.contract_calendar.last_trading_day`) handles the per-
+market roll-date rule, and `parse_contract_code` now accepts the union of
+all month codes used by registered markets.
+
+Scale all OHLC of the expiring contract (and recursively all older ones) by
+C_new/C_old so the series equals the front-month price at every seam.
+Volume is never scaled.
 """
 from __future__ import annotations
 

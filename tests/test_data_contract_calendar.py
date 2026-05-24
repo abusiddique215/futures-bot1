@@ -24,8 +24,24 @@ def test_third_friday_when_month_starts_on_friday() -> None:
 
 
 def test_contract_code_to_month() -> None:
+    """CONTRACT_MONTHS covers every code used by any registered market.
+
+    Plan 14: extended from the NQ/ES quarterly set (H/M/U/Z) to the union
+    that also covers Gold's even-month cycle (G/J/M/Q/V/Z). See
+    `tests/markets/test_contract_calendar_markets.py` for the multi-market
+    parametrize coverage.
+    """
     from bot.data.contract_calendar import CONTRACT_MONTHS
-    assert CONTRACT_MONTHS == {"H": 3, "M": 6, "U": 9, "Z": 12}
+    # Original NQ/ES quarterly codes still mapped correctly.
+    assert CONTRACT_MONTHS["H"] == 3
+    assert CONTRACT_MONTHS["M"] == 6
+    assert CONTRACT_MONTHS["U"] == 9
+    assert CONTRACT_MONTHS["Z"] == 12
+    # Plan 14 additions for Gold (G/J/Q/V).
+    assert CONTRACT_MONTHS["G"] == 2
+    assert CONTRACT_MONTHS["J"] == 4
+    assert CONTRACT_MONTHS["Q"] == 8
+    assert CONTRACT_MONTHS["V"] == 10
 
 
 def test_roll_calendar_quarterly() -> None:

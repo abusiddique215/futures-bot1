@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from bot.markets.registry import get_market, is_micro
 from bot.types import AccountState
 
 
@@ -47,8 +48,19 @@ class CombineIntradayDrawdown:
         return state.is_locked
 
     def max_position(self, symbol: str, state: AccountState) -> int:
-        if symbol.startswith("MNQ"):
-            return self._max_mini * 10  # 10 micros = 1 mini
-        if symbol.startswith("NQ"):
-            return self._max_mini
-        raise ValueError(f"Unsupported symbol for Topstep: {symbol}")
+        """Per-market position cap. Spec 04 §3.2 rule 4.
+
+        Lookup goes through `bot.markets.registry` so adding a market in
+        Plan 14 (GC/MGC, ES/MES, ...) requires no change here. Micros get the
+        full market's `micro_to_full_ratio` extra contracts (10x for every
+        registered market as of 2026-05-23). Unknown symbol -> KeyError from
+        the registry, surfaced as ValueError so callers see the same exception
+        type they did pre-Plan-14.
+        """
+        try:
+            market = get_market(symbol)
+        except KeyError as e:
+            raise ValueError(f"Unsupported symbol for Topstep: {symbol}") from e
+        if is_micro(symbol):
+            return self._max_mini * market.micro_to_full_ratio
+        return self._max_mini

@@ -37,6 +37,8 @@ Timestamps are exchange-local (ET) per FirstRateData's docs; we treat them as `A
 
 **Filename convention** (FirstRateData scheme): `NQ_<YYYY><M>_1min.csv` where `<M>` is the CME contract-month code (`H` Mar, `M` Jun, `U` Sep, `Z` Dec). Example: `NQ_2023Z_1min.csv` is the Dec-2023 NQ contract. MNQ analogous: `MNQ_2023Z_1min.csv`.
 
+**Plan 14 update** (2026-05-23) — _multi-market plumbing_. The single source of truth for per-market parameters (tick size, tick value, multiplier, micro counterpart, listed contract months, roll-day rule, IB contract construction) is now `bot.markets.registry.MARKETS`. Six markets are registered: **NQ, MNQ, ES, MES** (CME equity index) and **GC, MGC** (COMEX gold). The filename convention generalizes to `<ROOT>_<YYYY><MonthCode>_1min.csv` for any registered root. Gold uses even months G/J/M/Q/V/Z (Feb/Apr/Jun/Aug/Oct/Dec) on the third-to-last business day of the **preceding** month; equity-index markets retain the H/M/U/Z quarterly + third-Friday-of-contract-month rule. Symbol-startswith branching is forbidden anywhere outside the registry — every per-market constant must come from `get_market(symbol)`. See `bot.markets.spec.MarketSpec` for the schema and `docs/superpowers/research/2026-05-23-cme-comex-contract-specs.md` for value citations.
+
 **On-disk storage layout** (post-ingest):
 
 ```

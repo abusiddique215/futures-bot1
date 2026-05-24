@@ -1,4 +1,9 @@
-"""CLI entry point: python -m bot.data.ingest --symbol NQ --raw-root ... --parquet-root ..."""
+"""CLI entry point: python -m bot.data.ingest --symbol <ROOT> --raw-root ... --parquet-root ...
+
+Plan 14: `--symbol` accepts any root registered in `bot.markets.registry.MARKETS`
+(NQ, MNQ, ES, MES, GC, MGC as of 2026-05-23). The loader is symbol-agnostic;
+the filename regex in `bot.data.firstratedata` is the per-market gate.
+"""
 from __future__ import annotations
 
 import argparse
@@ -6,11 +11,14 @@ import sys
 from pathlib import Path
 
 from bot.data.firstratedata import FirstRateDataLoader, IngestQualityError
+from bot.markets.registry import MARKETS
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bot.data.ingest")
-    parser.add_argument("--symbol", required=True, choices=["NQ", "MNQ"])
+    parser.add_argument(
+        "--symbol", required=True, choices=sorted(MARKETS.keys()),
+    )
     parser.add_argument("--raw-root", required=True, type=Path)
     parser.add_argument("--parquet-root", required=True, type=Path)
     parser.add_argument("--quarantine-threshold", type=float, default=0.001)
