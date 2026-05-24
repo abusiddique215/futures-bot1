@@ -75,6 +75,11 @@ class TopstepSimEngine:
         """
         self._now = lambda: ts
 
+    def set_account(self, account: SimAccount) -> None:
+        """Replace the held SimAccount. Used by scenario builders to script
+        broker-driven stage transitions (e.g. Combine → Combine-passed)."""
+        self._account = account
+
     # ---- order submission ----------------------------------------------
 
     def submit_order(self, intent: OrderIntent, mid_price: float) -> OrderEvent:
