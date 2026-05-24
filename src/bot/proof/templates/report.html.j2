@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Proof Report - {{ report.bot_name }}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+         max-width: 1200px; margin: 2rem auto; color: #222; padding: 0 1rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 0.25rem 0; }
+  .period { color: #666; font-size: 0.95rem; margin-bottom: 1.5rem; }
+  table.metrics { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
+  table.metrics td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #eee; }
+  table.metrics td.label { color: #666; font-weight: 500; width: 40%; }
+  table.metrics td.value { text-align: right; font-variant-numeric: tabular-nums; }
+  table.headline td.value { font-size: 1.5rem; font-weight: 600; }
+  table.secondary td.value { font-size: 1.0rem; }
+  img.equity { width: 100%; height: auto; border: 1px solid #ddd; }
+  h2 { font-size: 1.05rem; color: #555; margin: 1.5rem 0 0.5rem 0; }
+</style>
+</head>
+<body>
+  <h1>Proof Report - {{ report.bot_name }}</h1>
+  <div class="period">
+    {{ report.period_start.isoformat() }} to {{ report.period_end.isoformat() }}
+  </div>
+
+  <h2>Headline Metrics</h2>
+  <table class="metrics headline">
+    <tr><td class="label">Net Profit</td>
+        <td class="value">{{ fmt_money(report.net_profit) }}</td></tr>
+    <tr><td class="label">Max Drawdown</td>
+        <td class="value">{{ fmt_money(report.max_drawdown) }}</td></tr>
+    <tr><td class="label">Total Trades</td>
+        <td class="value">{{ report.total_trades }}</td></tr>
+    <tr><td class="label">% Profitable</td>
+        <td class="value">{{ fmt_pct(report.pct_profitable) }}</td></tr>
+    <tr><td class="label">Profit Factor</td>
+        <td class="value">{{ fmt_float(report.profit_factor) }}</td></tr>
+  </table>
+
+  <h2>Secondary Metrics</h2>
+  <table class="metrics secondary">
+    <tr><td class="label">Avg Trade</td>
+        <td class="value">{{ fmt_money(report.avg_trade_pnl) }}</td></tr>
+    <tr><td class="label">Avg Win</td>
+        <td class="value">{{ fmt_money(report.avg_win) }}</td></tr>
+    <tr><td class="label">Avg Loss</td>
+        <td class="value">{{ fmt_money(report.avg_loss) }}</td></tr>
+    <tr><td class="label">Avg Holding (min)</td>
+        <td class="value">{{ fmt_float(report.avg_holding_minutes) }}</td></tr>
+    <tr><td class="label">Sharpe (light)</td>
+        <td class="value">{{ fmt_float(report.sharpe_light) }}</td></tr>
+    <tr><td class="label">Period Start</td>
+        <td class="value">{{ report.period_start.isoformat() }}</td></tr>
+    <tr><td class="label">Period End</td>
+        <td class="value">{{ report.period_end.isoformat() }}</td></tr>
+    <tr><td class="label">Bot</td>
+        <td class="value">{{ report.bot_name }}</td></tr>
+  </table>
+
+  <h2>Equity Curve</h2>
+  <img class="equity" src="{{ equity_curve_filename }}"
+       alt="Cumulative P&amp;L over time">
+</body>
+</html>

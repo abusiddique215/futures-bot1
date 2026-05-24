@@ -45,6 +45,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"bot.proof" = ["templates/*.j2"]
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

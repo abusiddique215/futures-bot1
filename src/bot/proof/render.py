@@ -13,8 +13,32 @@ import matplotlib
 matplotlib.use("Agg")  # MUST precede pyplot import — headless rendering.
 
 import matplotlib.pyplot as plt
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from bot.proof.metrics import ClosedTrade
+from bot.proof.metrics import ClosedTrade, StrategyReport
+
+_TEMPLATE_DIR = Path(__file__).parent / "templates"
+_ENV = Environment(
+    loader=FileSystemLoader(_TEMPLATE_DIR),
+    autoescape=select_autoescape(["html", "j2"]),
+)
+
+
+def _fmt_money(value: float) -> str:
+    return f"${value:,.2f}"
+
+
+def _fmt_pct(value: float) -> str:
+    return f"{value * 100:.2f}%"
+
+
+def _fmt_float(value: float) -> str:
+    return f"{value:.3f}"
+
+
+_ENV.globals.update(
+    fmt_money=_fmt_money, fmt_pct=_fmt_pct, fmt_float=_fmt_float,
+)
 
 
 def render_equity_curve(
@@ -51,4 +75,18 @@ def render_equity_curve(
     fig.tight_layout()
     fig.savefig(output_path, format="png")
     plt.close(fig)
+    return output_path
+
+
+def render_html(
+    report: StrategyReport, equity_curve_filename: str, output_path: Path,
+) -> Path:
+    """Render the proof HTML page from the Jinja2 template.
+
+    `equity_curve_filename` is written into the `<img src=...>` as-is — keep
+    it relative to `output_path.parent` so the bundle stays portable.
+    """
+    template = _ENV.get_template("report.html.j2")
+    html = template.render(report=report, equity_curve_filename=equity_curve_filename)
+    output_path.write_text(html)
     return output_path
