@@ -30,6 +30,7 @@ from bot.risk.policies import DrawdownPolicy
 from bot.runtime.fleet.schedule import AlwaysOn, CustomWindows, MarketHours, Schedule
 from bot.runtime.fleet.spec import BotSpec
 from bot.strategy.orb import OpeningRangeBreakoutStrategy, ORBProfile
+from bot.strategy.tiered_sizing import TieredSizingDecorator
 
 _CT: Final[ZoneInfo] = ZoneInfo("America/Chicago")
 
@@ -71,6 +72,20 @@ def _build_orb(params: dict[str, Any]) -> Strategy:
     return OpeningRangeBreakoutStrategy(ORBProfile.model_validate(params))
 
 
+def _build_orb_5m_tiered(params: dict[str, Any]) -> Strategy:
+    """Compose `OpeningRangeBreakoutStrategy` + `TieredSizingDecorator`.
+
+    Params shape:
+      {
+        "strategy": <ORBProfile fields>,
+        "tiered":   {"tier_breakpoints": [...], "symbol": "..."},
+      }
+    """
+    inner = OpeningRangeBreakoutStrategy(ORBProfile.model_validate(params["strategy"]))
+    tiered = dict(params.get("tiered") or {})
+    return TieredSizingDecorator(inner=inner, **tiered)
+
+
 def _build_market_hours(params: dict[str, Any]) -> Schedule:
     open_ct = _parse_time(params.get("open_ct", time(8, 30)))
     close_ct = _parse_time(params.get("close_ct", time(15, 10)))
@@ -102,6 +117,7 @@ class BotRegistry:
 
     def _register_builtins(self) -> None:
         self.register_strategy("orb_5m", _build_orb)
+        self.register_strategy("orb_5m_tiered", _build_orb_5m_tiered)
         self.register_risk_policy(
             "combine_intraday",
             lambda p: CombineIntradayDrawdown(**p),
