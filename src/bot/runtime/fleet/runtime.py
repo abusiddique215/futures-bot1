@@ -8,16 +8,25 @@ bars-processed.
 
 The heartbeat path is shared: launchd cares whether the fleet is alive,
 not which bot last wrote.
+
+Plan 21: optional `allocator` + `dashboard_port` ctor kwargs wire in
+the cross-bot position cap (T2) and the read-only side-car dashboard
+(T5). The dashboard binds to 127.0.0.1 only and a crash in its task
+does NOT crash the fleet (return_exceptions=True on the gather).
 """
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+import uvicorn
+
 from bot.backtest.tracker import AccountStateTracker
+from bot.dashboard.app import DashboardState, create_app
 from bot.execution.ports import ExecutionClient
 from bot.journal.journal import Journal
 from bot.runtime.bar_source import LiveBarSource
@@ -26,6 +35,8 @@ from bot.runtime.fleet.registry import ResolvedBot
 from bot.runtime.fleet.spec import BotSpec
 from bot.runtime.live_loop import LiveTradingLoop
 from bot.types import Bar
+
+log = logging.getLogger(__name__)
 
 
 class _Telemetry(Protocol):
@@ -69,6 +80,8 @@ class FleetRuntime:
         telemetry: _Telemetry,
         heartbeat_path: Path,
         allocator: FleetAllocator | None = None,
+        dashboard_port: int | None = None,
+        dashboard_bots_dir: Path | None = None,
     ) -> None:
         self._bots = bots
         self._broker = broker
@@ -76,6 +89,29 @@ class FleetRuntime:
         self._telemetry = telemetry
         self._heartbeat_path = heartbeat_path
         self._allocator = allocator
+        # Dashboard side-car config. Loopback-only by hard constant — never
+        # `0.0.0.0`. The bots_dir defaults to None so callers can pass a
+        # dashboard_port for tests without committing to a specific
+        # config/bots/ layout; if not supplied at run() time we fall back
+        # to "config/bots".
+        self._dashboard_port = dashboard_port
+        self._dashboard_host = "127.0.0.1"
+        self._dashboard_bots_dir = dashboard_bots_dir
+        self._dashboard_server: uvicorn.Server | None = None
+        # Shutdown signal that the fleet propagates to every LiveTradingLoop.
+        self._stop_event: asyncio.Event | None = None
+
+    def request_shutdown(self) -> None:
+        """Signal a graceful shutdown of the fleet + dashboard.
+
+        Sets the stop_event each LiveTradingLoop watches and asks the
+        uvicorn server to exit. Idempotent; safe to call from a signal
+        handler or another asyncio task.
+        """
+        if self._stop_event is not None:
+            self._stop_event.set()
+        if self._dashboard_server is not None:
+            self._dashboard_server.should_exit = True
 
     async def run(self) -> dict[str, BotResult]:
         """Run every bot concurrently. Failures stay local — caller still
@@ -83,6 +119,11 @@ class FleetRuntime:
         """
         if not self._bots:
             return {}
+
+        self._stop_event = asyncio.Event()
+        dashboard_task: asyncio.Task[None] | None = None
+        if self._dashboard_port is not None:
+            dashboard_task = self._launch_dashboard()
 
         journals: list[Journal] = []
         sources: list[_CountingBarSource] = []
@@ -145,7 +186,10 @@ class FleetRuntime:
                         _fleet_positions if self._allocator is not None else None
                     ),
                 )
-                tasks.append(asyncio.create_task(loop.run(source), name=bot.name))
+                tasks.append(asyncio.create_task(
+                    loop.run(source, stop_event=self._stop_event),
+                    name=bot.name,
+                ))
 
             raw = await asyncio.gather(*tasks, return_exceptions=True)
             results: dict[str, BotResult] = {}
@@ -158,6 +202,14 @@ class FleetRuntime:
                 )
             return results
         finally:
+            # Bots done → tell the dashboard to stop and await its task so
+            # uvicorn shuts down cleanly (no in-flight requests dropped).
+            if dashboard_task is not None and self._dashboard_server is not None:
+                self._dashboard_server.should_exit = True
+                try:
+                    await asyncio.wait_for(dashboard_task, timeout=2.0)
+                except (TimeoutError, Exception) as e:
+                    log.warning("dashboard shutdown raised: %s", e)
             for journal in journals:
                 try:
                     await journal.close()
@@ -165,3 +217,40 @@ class FleetRuntime:
                     # Best-effort cleanup; per-bot failures shouldn't block
                     # the others from closing.
                     pass
+
+    def _launch_dashboard(self) -> asyncio.Task[None]:
+        """Create the FastAPI app + uvicorn.Server and spawn its serve() task.
+
+        The server task is wrapped so an exception inside uvicorn doesn't
+        crash the fleet — we log and continue.
+        """
+        bots_dir = self._dashboard_bots_dir or Path("config/bots")
+        state = DashboardState(
+            bots_dir=bots_dir, heartbeat_path=self._heartbeat_path,
+        )
+        app = create_app(state)
+        config = uvicorn.Config(
+            app, host=self._dashboard_host, port=self._dashboard_port or 0,
+            log_level="warning",
+            # access_log off — local single-user dashboard; serving logs
+            # are noise in the fleet log.
+            access_log=False,
+            # Don't install signal handlers — FleetRuntime owns the
+            # shutdown story, and uvicorn would otherwise compete for
+            # SIGTERM with the runtime's own handler.
+            lifespan="off",
+        )
+        server = uvicorn.Server(config)
+        self._dashboard_server = server
+
+        async def _serve() -> None:
+            # Call _serve directly (instead of serve) so uvicorn's
+            # capture_signals contextmanager doesn't install handlers
+            # that fight the fleet's own signal story. should_exit
+            # (set via request_shutdown) is still respected.
+            try:
+                await server._serve(None)
+            except Exception as e:
+                log.error("dashboard side-car crashed: %s", e)
+
+        return asyncio.create_task(_serve(), name="fleet-dashboard")
