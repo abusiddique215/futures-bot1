@@ -44,6 +44,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exit after reconcile + hydrate (no event loop). Smoke test.",
     )
+    # Plan 21: dashboard side-car (loopback-only read-only fleet monitor).
+    p.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Run the local read-only dashboard alongside the fleet "
+             "(--bots only). Binds to 127.0.0.1.",
+    )
+    p.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=8765,
+        help="Port for --dashboard. Default 8765.",
+    )
     return p
 
 
@@ -54,7 +67,13 @@ async def cli_main(argv: list[str] | None = None) -> int:
         return await _runtime_fleet(
             bots_dir=args.bots,
             check_only=args.check,
+            dashboard_enabled=args.dashboard,
+            dashboard_port=args.dashboard_port,
         )
+    if args.dashboard:
+        # Single-bot mode (--config) doesn't run the fleet dashboard. Be
+        # loud about the mismatch instead of silently ignoring the flag.
+        raise SystemExit("--dashboard requires --bots (the fleet runtime).")
     return await _runtime_main(
         config_path=args.config,
         check_only=args.check,

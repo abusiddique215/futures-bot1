@@ -474,6 +474,8 @@ async def run_fleet(
     connect_broker_fn: Callable[[BotConfig, SecretsDict], Awaitable[Any]] | None = None,
     bar_source_factory: Callable[[Any], Any] | None = None,
     bus: _Bus | None = None,
+    dashboard_enabled: bool = False,
+    dashboard_port: int = 8765,
 ) -> int:
     """Load N BotSpecs, resolve them, run them concurrently under one broker.
 
@@ -481,10 +483,18 @@ async def run_fleet(
     per bot at `spec.journal_path`. Fleet runs until every bot completes
     (or fails); failures are logged per-bot but do NOT crash the fleet.
 
+    Plan 21: `dashboard_enabled` + `dashboard_port` start a local
+    read-only HTTP dashboard on 127.0.0.1; `--check` skips the dashboard
+    (smoke tests shouldn't bind a port). The allocator is also
+    constructed when --dashboard is set so production runs get both
+    pieces wired through one CLI flag.
+
     Returns EXIT_OK on success, EXIT_NO_BOTS if zero enabled bots.
     """
+    from bot.markets.registry import get_market
     from bot.observability.bus import NoopTelemetryBus
     from bot.runtime.bar_source import SimBarSource
+    from bot.runtime.fleet.allocator import FleetAllocator
     from bot.runtime.fleet.registry import BotRegistry
     from bot.runtime.fleet.runtime import FleetRuntime
     from bot.runtime.fleet.spec import load_bot_specs
@@ -508,10 +518,8 @@ async def run_fleet(
         await broker.connect()
     else:
         # Use first enabled spec to satisfy connect_broker's BotConfig signature.
-        # NB: this is a transitional shim — Plan 12 punts on per-bot account
-        # binding (a Plan 21 feature). The fleet uses a single shared broker.
-        # We construct a minimal placeholder BotConfig so the existing
-        # connect_broker dispatch table can be reused without rewrite.
+        # Plan 21 lands the cross-bot allocator that justifies the single
+        # shared broker design — see bot.runtime.fleet.allocator.
         broker = await connect_broker_fn(_placeholder_cfg(enabled[0]), SecretsDict())
 
     registry = BotRegistry()
@@ -524,6 +532,10 @@ async def run_fleet(
                      r.name, type(r.strategy).__name__,
                      type(r.risk_gate.policy).__name__,
                      type(r.schedule).__name__)
+        if dashboard_enabled:
+            # Print the URL the operator would visit so --check users
+            # know what the dashboard would expose without binding a port.
+            log.info("dashboard would serve at http://127.0.0.1:%d/", dashboard_port)
         try:
             await broker.disconnect()
         except Exception as e:
@@ -531,12 +543,25 @@ async def run_fleet(
         return EXIT_OK
 
     factory = bar_source_factory or (lambda spec: SimBarSource([]))
+    allocator = None
+    if dashboard_enabled:
+        # Plan 21: --dashboard also turns the cross-bot allocator on.
+        # 5 minis is Topstep's $50K Combine account cap; bigger accounts
+        # tune via risk_params in their own BotSpecs (per-bot caps still
+        # run via the gate; this is the SHARED account cap).
+        allocator = FleetAllocator(
+            account_max_mini=5, market_lookup=get_market,
+        )
+        log.info("dashboard serving at http://127.0.0.1:%d/", dashboard_port)
     fleet = FleetRuntime(
         bots=resolved,
         broker=broker,
         bar_source_factory=factory,
         telemetry=NoopTelemetryBus(),
         heartbeat_path=Path("state/heartbeat"),
+        allocator=allocator,
+        dashboard_port=dashboard_port if dashboard_enabled else None,
+        dashboard_bots_dir=bots_dir if dashboard_enabled else None,
     )
     try:
         results = await fleet.run()

@@ -97,6 +97,35 @@ async def test_all_disabled_returns_no_bots(tmp_path: Path) -> None:
     assert exit_code == EXIT_NO_BOTS
 
 
+async def test_check_with_dashboard_flag_does_not_bind_port(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """`--check --dashboard` logs the would-be URL but doesn't open a socket.
+
+    Smoke-test invariant: --check is a quick offline validation; it must
+    not require a free port or open any sockets.
+    """
+    import logging
+    bots_dir = tmp_path / "bots"
+    bots_dir.mkdir()
+    j1 = tmp_path / "j1.db"
+    (bots_dir / "alpha.yml").write_text(_MINIMAL_SPEC.format(jpath=j1), encoding="utf-8")
+
+    broker = _broker_mock()
+    with caplog.at_level(logging.INFO, logger="bot.runtime.main"):
+        exit_code = await run_fleet(
+            bots_dir=bots_dir,
+            check_only=True,
+            connect_broker_fn=AsyncMock(return_value=broker),
+            dashboard_enabled=True,
+            dashboard_port=9999,
+        )
+    assert exit_code == EXIT_OK
+    assert any("127.0.0.1:9999" in r.message for r in caplog.records), (
+        f"expected URL in log, got: {[r.message for r in caplog.records]}"
+    )
+
+
 @pytest.mark.parametrize("check_only", [True, False])
 async def test_disabled_bots_skipped(tmp_path: Path, check_only: bool) -> None:
     """Disabled bots are filtered before construction; enabled bots remain."""

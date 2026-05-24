@@ -38,3 +38,31 @@ def test_check_flag_still_works_with_bots() -> None:
     p = build_parser()
     ns = p.parse_args(["--bots", "config/bots/", "--check"])
     assert ns.check is True
+
+
+def test_parser_dashboard_flag_defaults_off() -> None:
+    """Without --dashboard, dashboard is disabled."""
+    p = build_parser()
+    ns = p.parse_args(["--bots", "config/bots/"])
+    assert ns.dashboard is False
+
+
+def test_parser_accepts_dashboard_flag() -> None:
+    """--dashboard turns the side-car HTTP server on."""
+    p = build_parser()
+    ns = p.parse_args(["--bots", "config/bots/", "--dashboard"])
+    assert ns.dashboard is True
+
+
+def test_parser_dashboard_port_default_is_8765() -> None:
+    p = build_parser()
+    ns = p.parse_args(["--bots", "config/bots/", "--dashboard"])
+    assert ns.dashboard_port == 8765
+
+
+def test_parser_accepts_custom_dashboard_port() -> None:
+    p = build_parser()
+    ns = p.parse_args([
+        "--bots", "config/bots/", "--dashboard", "--dashboard-port", "9090",
+    ])
+    assert ns.dashboard_port == 9090
