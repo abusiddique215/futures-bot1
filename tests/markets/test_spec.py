@@ -21,7 +21,7 @@ def _make_nq_spec():
         micro_root="MNQ",
         micro_to_full_ratio=10,
         contract_months=("H", "M", "U", "Z"),
-        roll_day_rule="third_friday_prev_month",
+        roll_day_rule="third_friday_of_contract_month",
         ib_sec_type="FUT",
         ib_currency="USD",
     )
@@ -38,7 +38,7 @@ def test_market_spec_constructs_with_all_fields() -> None:
     assert s.micro_root == "MNQ"
     assert s.micro_to_full_ratio == 10
     assert s.contract_months == ("H", "M", "U", "Z")
-    assert s.roll_day_rule == "third_friday_prev_month"
+    assert s.roll_day_rule == "third_friday_of_contract_month"
     assert s.ib_sec_type == "FUT"
     assert s.ib_currency == "USD"
 
@@ -69,7 +69,7 @@ def test_market_spec_micro_root_optional() -> None:
         micro_root=None,
         micro_to_full_ratio=1,
         contract_months=("H", "M", "U", "Z"),
-        roll_day_rule="third_friday_prev_month",
+        roll_day_rule="third_friday_of_contract_month",
         ib_sec_type="FUT",
         ib_currency="USD",
     )

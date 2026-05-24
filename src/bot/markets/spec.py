@@ -12,8 +12,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-# Roll-day rule names. Dispatched by `bot.data.contract_calendar.roll_date`.
-RollDayRule = Literal["third_friday_prev_month", "first_notice_day"]
+# Roll-day rule names. Dispatched by `bot.data.contract_calendar.last_trading_day`.
+#
+# "third_friday_of_contract_month": NQ, MNQ, ES, MES — settles on the third
+#   Friday of the contract month itself (e.g., NQH26 last-trades 2026-03-20).
+# "third_last_business_day_of_prev_month": GC, MGC — settles on the third-last
+#   business day of the month preceding the delivery month (e.g., GCM26 / Jun-2026
+#   last-trades on the third-last business day of May 2026).
+RollDayRule = Literal[
+    "third_friday_of_contract_month",
+    "third_last_business_day_of_prev_month",
+]
 
 
 @dataclass(frozen=True, slots=True)
