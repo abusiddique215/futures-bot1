@@ -22,6 +22,8 @@ Quick-navigation file. Read `00-architecture-overview.md` first; everything else
 | 06 | `06-observability.md` | Logs, SQLite journal, Telegram alerts. |
 | 07 | `07-config-and-deploy.md` | Config schema, secrets, Docker, LaunchAgent, restart contract. |
 | 08 | `08-proof-surface.md` | Per-bot proof bundle (StrategyReport JSON + equity PNG + HTML). |
+| 09 | `09-bot-lineup.md` | The six VSL-aligned bots — strategies, schedules, risk policies. |
+| 10 | `10-dashboard-allocator.md` | Local read-only dashboard + cross-bot FleetAllocator. |
 
 ## Cross-reference cheat sheet
 
