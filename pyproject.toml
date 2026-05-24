@@ -25,6 +25,9 @@ dependencies = [
     "project-x-py>=3.5.9,<4.0",       # TopstepX REST + SignalR (module name: project_x_py)
     # Plan 9 deps (Mac deploy / runtime)
     "python-dotenv>=1.0",             # .env file loading for load_secrets()
+    # Plan 13 deps (proof-surface bundle: equity-curve PNG + HTML report)
+    "matplotlib>=3.8",                # equity-curve PNG (Agg backend, headless)
+    "jinja2>=3.1",                    # HTML report template rendering
 ]
 
 [project.optional-dependencies]
@@ -41,6 +44,9 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"bot.proof" = ["templates/*.j2"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
@@ -79,6 +85,13 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["bot.data.firstratedata", "bot.data.continuous"]
 disable_error_code = ["no-untyped-call"]
+
+# matplotlib's bundled type stubs accept only float/Sequence inputs for plot(),
+# but Axes.plot() accepts datetime sequences at runtime (mpl auto-converts).
+# Disable arg-type only in the proof renderer; the rest of src/ stays strict.
+[[tool.mypy.overrides]]
+module = ["bot.proof.render"]
+disable_error_code = ["arg-type"]
 
 # Tests are explicit code; we don't enforce strict typing inside them so that
 # pytest fixture parameters can be written `(utc_now)` instead of

@@ -21,6 +21,7 @@ Quick-navigation file. Read `00-architecture-overview.md` first; everything else
 | 05 | `05-backtest-harness.md` | Walk-forward, Monte Carlo, parameter sweep, rule-replay. |
 | 06 | `06-observability.md` | Logs, SQLite journal, Telegram alerts. |
 | 07 | `07-config-and-deploy.md` | Config schema, secrets, Docker, LaunchAgent, restart contract. |
+| 08 | `08-proof-surface.md` | Per-bot proof bundle (StrategyReport JSON + equity PNG + HTML). |
 
 ## Cross-reference cheat sheet
 
