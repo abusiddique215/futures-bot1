@@ -4,6 +4,13 @@
 #   - DISCORD_BOT_TOKEN env var + discord_channel_ids populated below, OR
 #   - LUX_BOT_FIXTURE_PATH env var pointing at a JSON file of SignalEvents
 #     (smoke / replay mode)
+#
+# DO NOT FLIP `enabled: true` YET. As of Plan 19, FleetRuntime does not
+# call SignalStrategy.start(), so the background pump that drains
+# Discord messages into the strategy's deque never runs. The bot would
+# silently do nothing. Production wiring lands in Plan 21 (Strategy
+# lifecycle hook on FleetRuntime). See docs/.../09-bot-lineup.md
+# "Open items for Plan 21".
 name: lux_bot
 enabled: false
 symbol: MNQH26
