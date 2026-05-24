@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-bg-0 text-text-primary font-sans;
+    margin: 0;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Numeric values everywhere use tabular-nums for clean alignment. */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
+  /* Scrollbar — dark, subtle */
+  ::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-bg-1;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-bg-3 rounded;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-border;
+  }
+}
+
+@layer components {
+  .card-surface {
+    @apply bg-bg-1 border border-border rounded-lg;
+  }
+
+  .pulse-dot {
+    @apply inline-block w-2 h-2 rounded-full animate-pulse-dot;
+  }
+}
