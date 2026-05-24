@@ -1,0 +1,82 @@
+{% extends "base.html.j2" %}
+{% block title %}{{ bot.name }} - Topstep Bot{% endblock %}
+{% block content %}
+<h1>{{ bot.name }}</h1>
+<div class="meta">
+  <a href="/">&larr; back to fleet</a>
+  &middot; symbol {{ bot.symbol }}
+  &middot; {{ "enabled" if bot.enabled else "disabled" }}
+  &middot; status {{ bot.status }}
+  &middot; auto-refresh every {{ refresh_seconds }}s
+</div>
+
+<h2>Summary</h2>
+<table>
+  <tr><th>Equity</th>
+      <td>{{ "%.2f"|format(detail.equity) }}</td></tr>
+  <tr><th>Realized P&amp;L today</th>
+      <td class="{% if detail.realized_pnl_today >= 0 %}pos{% else %}neg{% endif %}">
+        {{ "%.2f"|format(detail.realized_pnl_today) }}
+      </td></tr>
+  <tr><th>High-water equity</th>
+      <td>{{ "%.2f"|format(detail.high_water_equity) }}</td></tr>
+  <tr><th>Open positions</th>
+      <td>
+        {% if detail.open_positions %}
+          {% for sym, qty in detail.open_positions.items() %}
+            {{ sym }}: {{ qty }}{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        {% else %}
+          flat
+        {% endif %}
+      </td></tr>
+</table>
+
+<h2>Recent trades (last {{ detail.recent_trades|length }})</h2>
+{% if detail.recent_trades %}
+<table>
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Symbol</th>
+      <th>Side</th>
+      <th>Qty</th>
+      <th>Fill price</th>
+      <th>Client order id</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for trade in detail.recent_trades %}
+    <tr>
+      <td>{{ trade.timestamp.isoformat() }}</td>
+      <td>{{ trade.symbol }}</td>
+      <td>{{ trade.side }}</td>
+      <td>{{ trade.quantity }}</td>
+      <td>{{ "%.4f"|format(trade.fill_price) }}</td>
+      <td>{{ trade.client_order_id }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="meta">no fills yet</p>
+{% endif %}
+
+<h2>Equity curve ({{ detail.equity_curve|length }} samples)</h2>
+{% if detail.equity_curve %}
+<table>
+  <thead><tr><th>Time</th><th>Equity</th><th>Realized P&amp;L</th></tr></thead>
+  <tbody>
+    {% for point in detail.equity_curve[-20:] %}
+    <tr>
+      <td>{{ point.timestamp.isoformat() }}</td>
+      <td>{{ "%.2f"|format(point.equity) }}</td>
+      <td>{{ "%.2f"|format(point.realized_pnl) }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="meta">no equity snapshots yet</p>
+{% endif %}
+{% endblock %}

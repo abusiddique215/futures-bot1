@@ -4,22 +4,26 @@ Maintains realized + unrealized P&L across the backtest Bar loop, tracks
 high-water equity, and emits an AccountState snapshot for the RiskGate on
 every bar.
 
-Point value formula: TICK_VALUES[sym] / MIN_TICK[sym]
+Point value formula: TICK_VALUES[sym] / MIN_TICK[sym] == MarketSpec.multiplier
   MNQ = $0.50 / 0.25 = $2/pt
   NQ  = $5.00 / 0.25 = $20/pt
+
+Plan 21: symbol lookup routes through `bot.markets.registry.get_market`
+so contract-suffixed symbols ("MNQH26") resolve to the same point value
+as their bare root ("MNQ"). Removes a class of KeyError footguns in the
+e2e tests that bridge IB-style contract codes into the tracker.
 """
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Final
 
-from bot.constants import MIN_TICK, TICK_VALUES
+from bot.markets.registry import get_market
 from bot.types import AccountState, Bar
 
-# Point value: $/tick * ticks/pt.
-_POINT_VALUE: Final[dict[str, float]] = {
-    sym: TICK_VALUES[sym] / MIN_TICK[sym] for sym in TICK_VALUES
-}
+
+def _point_value(symbol: str) -> float:
+    """Resolve $/point for `symbol` (bare root or root+contract suffix)."""
+    return get_market(symbol).multiplier
 
 
 class AccountStateTracker:
@@ -76,7 +80,7 @@ class AccountStateTracker:
         self, symbol: str, closed_signed_qty: int, exit_price: float,
     ) -> None:
         entry = self._avg_entry[symbol]
-        pnl = (exit_price - entry) * closed_signed_qty * _POINT_VALUE[symbol]
+        pnl = (exit_price - entry) * closed_signed_qty * _point_value(symbol)
         self._realized += pnl
 
     def mark_to_market(self, bar: Bar) -> None:
@@ -92,7 +96,7 @@ class AccountStateTracker:
                 continue
             mark = self._last_bar_close[sym]
             entry = self._avg_entry[sym]
-            total += (mark - entry) * qty * _POINT_VALUE[sym]
+            total += (mark - entry) * qty * _point_value(sym)
         self._unrealized = total
         equity = self._start_balance + self._realized + self._unrealized
         if equity > self._high_water:

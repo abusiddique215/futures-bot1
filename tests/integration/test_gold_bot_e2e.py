@@ -34,14 +34,14 @@ _ET = ZoneInfo("America/New_York")
 
 
 def _spec(tmp_path: Path) -> BotSpec:
-    """Gold Bot spec with bare MGC root (see test_propbot_e2e for context)."""
+    """Gold Bot spec with contract-suffixed MGCH26 (Plan 21 tracker now suffix-aware)."""
     return BotSpec(
         name="goldbot_e2e",
         enabled=True,
-        symbol="MGC",
+        symbol="MGCH26",
         strategy_id="mean_reversion_bb",
         strategy_params={
-            "symbol": "MGC",
+            "symbol": "MGCH26",
             # Tight params so a short fixture exercises entries.
             "bb_period": 10,
             "bb_stddev": 1.5,
@@ -84,7 +84,7 @@ def _ranging_bars_with_oversold_dip() -> list[Bar]:
     for i, c in enumerate(closes):
         ts = start_utc + timedelta(minutes=i)
         bars.append(Bar(
-            symbol="MGC",
+            symbol="MGCH26",
             open=c,
             high=c + 0.2,
             low=c - 0.2,
@@ -100,7 +100,7 @@ def _out_of_window_bar() -> Bar:
     """One bar at 03:00 ET (outside the 08:30-15:00 US window)."""
     ts_et = datetime(2026, 5, 22, 3, 0, tzinfo=_ET)
     return Bar(
-        symbol="MGC", open=2400.0, high=2400.5, low=2399.5,
+        symbol="MGCH26", open=2400.0, high=2400.5, low=2399.5,
         close=2400.0, volume=10,
         timestamp=ts_et.astimezone(UTC), interval="1m",
     )
@@ -150,7 +150,7 @@ async def test_goldbot_e2e_records_mgc_symbol_under_custom_windows(tmp_path: Pat
         await cursor.close()
         # Some risk decisions may exist; if any do, they must all be on MGC.
         for symbol, _side in rows:
-            assert symbol == "MGC", f"unexpected symbol in risk_decisions: {symbol}"
+            assert symbol == "MGCH26", f"unexpected symbol in risk_decisions: {symbol}"
     finally:
         await journal.close()
 

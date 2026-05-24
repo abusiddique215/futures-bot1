@@ -35,14 +35,14 @@ _CT = ZoneInfo("America/Chicago")
 
 
 def _spec(tmp_path: Path) -> BotSpec:
-    """ES Scalper spec with bare MES root (see test_gold_bot_e2e for context)."""
+    """ES Scalper spec with contract-suffixed MESH26 (Plan 21 tracker now suffix-aware)."""
     return BotSpec(
         name="es_scalper_e2e",
         enabled=True,
-        symbol="MES",
+        symbol="MESH26",
         strategy_id="mean_reversion_bb",
         strategy_params={
-            "symbol": "MES",
+            "symbol": "MESH26",
             # Plan 18 scalper tuning (mirrors ES_SCALPER_DEFAULTS minus symbol).
             "bb_period": 10,
             "bb_stddev": 1.5,
@@ -109,7 +109,7 @@ def _multi_dip_session_bars() -> list[Bar]:
     for i, c in enumerate(closes):
         ts = start_utc + timedelta(minutes=i)
         bars.append(Bar(
-            symbol="MES",
+            symbol="MESH26",
             open=c,
             high=c + 0.25,
             low=c - 0.25,
@@ -168,9 +168,9 @@ async def test_es_scalper_e2e_multiple_entries_and_mes_symbol(tmp_path: Path) ->
         rows = await cursor.fetchall()
         await cursor.close()
 
-        # 1. Every row must be tagged MES (not MNQ / MGC / a contract suffix).
+        # 1. Every row must be tagged MESH26 (the configured contract symbol).
         for symbol, _side, _approved, _timestamp in rows:
-            assert symbol == "MES", f"unexpected symbol in risk_decisions: {symbol}"
+            assert symbol == "MESH26", f"unexpected symbol in risk_decisions: {symbol}"
 
         # 2. >= 2 BUY entries (the scalper cap of 10 must actually unlock
         #    more than Gold Bot's 3-cap equivalent of a single entry).

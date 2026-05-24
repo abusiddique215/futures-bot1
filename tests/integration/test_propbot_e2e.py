@@ -11,12 +11,9 @@ Deviations from the plan's literal wording:
     SimExecutionClient + StaticSource pattern from tests/runtime/fleet/
     test_runtime.py — the same pattern Plan 12 uses for fleet integration
     tests.
-  - BotSpec.symbol = "MNQ" (bare root) instead of "MNQH26". The shipped
-    YAML uses MNQH26 (Plan T3, test_propbot_config.py covers parsing);
-    here we use the bare root because AccountStateTracker._POINT_VALUE is
-    keyed on bare roots and would KeyError on the contract suffix. The
-    tracker-vs-contract-form issue is pre-existing (orthogonal to Plan 16);
-    Plan 21 should resolve it.
+  - BotSpec.symbol = "MNQH26" — Plan 21 made AccountStateTracker's
+    point-value lookup contract-suffix-aware via bot.markets.registry,
+    so the e2e tests now use the same symbol shape as production YAML.
   - "EFA Standard floor doesn't move intraday" is a property of
     EFAStandardEoDDrawdown itself; we assert it directly on the policy
     rather than re-deriving it from journal snapshots. Cheaper + more
@@ -51,10 +48,10 @@ def _spec(tmp_path: Path) -> BotSpec:
     return BotSpec(
         name="propbot_e2e",
         enabled=True,
-        symbol="MNQ",
+        symbol="MNQH26",
         strategy_id="trend_ema_pullback",
         strategy_params={
-            "symbol": "MNQ",
+            "symbol": "MNQH26",
             "fast_ema": 5,
             "slow_ema": 10,
             "pullback_atr_mult": 0.5,
@@ -98,7 +95,7 @@ def _build_uptrend_session_bars() -> list[Bar]:
         ts = start_utc + timedelta(minutes=i)
         # Tight high/low so ATR stays small and TP triggers on regular bars.
         bars.append(Bar(
-            symbol="MNQ",
+            symbol="MNQH26",
             open=c,
             high=c + 0.5,
             low=c - 0.5,
@@ -110,7 +107,7 @@ def _build_uptrend_session_bars() -> list[Bar]:
     # Replace bar 30 (the pullback) with explicit low touching the fast EMA.
     pullback = bars[30]
     bars[30] = Bar(
-        symbol="MNQ", open=pullback.open, high=pullback.high,
+        symbol="MNQH26", open=pullback.open, high=pullback.high,
         low=18_053.0, close=18_054.0, volume=100,
         timestamp=pullback.timestamp, interval="1m",
     )

@@ -90,3 +90,29 @@ def test_tracker_high_water_advances_with_equity_but_not_drawdown() -> None:
     s2 = t.snapshot(timestamp=datetime(2026, 1, 1, 14, 30, tzinfo=UTC))
     assert s2.high_water_equity == 50_100.0
     assert s2.equity == 50_020.0
+
+
+def test_tracker_handles_contract_suffixed_symbols() -> None:
+    """Plan 21: tracker must accept 'MNQH26' (root+suffix) as well as bare 'MNQ'.
+
+    Routes the point-value lookup through `bot.markets.registry.get_market`,
+    which extracts the root from suffixed contract codes ('MNQH26' → 'MNQ').
+    Without this, fills on contract-suffixed symbols would KeyError on the
+    bare-root keys of `_POINT_VALUE`.
+    """
+    from bot.backtest.tracker import AccountStateTracker
+    t = AccountStateTracker(start_balance=50_000, is_combine=True)
+    t.record_fill(symbol="MNQH26", signed_qty=2, fill_price=16_500.0,
+                  ts=datetime(2026, 1, 1, tzinfo=UTC))
+    suffixed_bar = Bar(
+        symbol="MNQH26", open=16_510.0, high=16_510.0, low=16_510.0,
+        close=16_510.0, volume=100,
+        timestamp=datetime(2026, 1, 1, 14, 30, tzinfo=UTC),
+        interval="1m",
+    )
+    t.mark_to_market(bar=suffixed_bar)
+    s = t.snapshot(timestamp=datetime(2026, 1, 1, 14, 30, tzinfo=UTC))
+    # Same as the bare-MNQ case: 10pts * 2 * $2/pt = $40 unrealized.
+    assert s.unrealized_pnl == 40.0
+    assert s.equity == 50_040.0
+    assert s.open_positions == {"MNQH26": 2}

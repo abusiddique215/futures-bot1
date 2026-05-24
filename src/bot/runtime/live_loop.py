@@ -22,6 +22,7 @@ On shutdown (stop_event set), the loop:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -31,6 +32,7 @@ from bot.backtest.tracker import AccountStateTracker
 from bot.journal.journal import Journal
 from bot.risk.gate import TopstepRiskGate
 from bot.runtime.bar_source import LiveBarSource
+from bot.runtime.fleet.allocator import FleetAllocator
 from bot.runtime.fleet.schedule import AlwaysOn, Schedule
 from bot.runtime.heartbeat import Heartbeat
 from bot.types import ApprovedOrder
@@ -55,6 +57,9 @@ class LiveTradingLoop:
         heartbeat_path: Path,
         symbol: str,
         schedule: Schedule | None = None,
+        allocator: FleetAllocator | None = None,
+        bot_name: str | None = None,
+        fleet_positions_fn: Callable[[], dict[str, dict[str, int]]] | None = None,
     ) -> None:
         self._strategy = strategy
         self._gate = gate
@@ -67,6 +72,16 @@ class LiveTradingLoop:
         # Per-bot trading window. Defaults to AlwaysOn so single-bot callers
         # see no behavior change.
         self._schedule: Schedule = schedule if schedule is not None else AlwaysOn()
+        # Plan 21: optional fleet-wide allocator runs AFTER per-bot gate.
+        # If allocator is set, bot_name and fleet_positions_fn must also be
+        # set so approve_intent has the context it needs.
+        self._allocator = allocator
+        self._bot_name = bot_name
+        self._fleet_positions_fn = fleet_positions_fn
+        if allocator is not None and (bot_name is None or fleet_positions_fn is None):
+            raise ValueError(
+                "LiveTradingLoop: allocator requires bot_name + fleet_positions_fn",
+            )
 
     async def run(
         self,
@@ -119,6 +134,23 @@ class LiveTradingLoop:
                 decision = self._gate.approve_or_deny(intent, state)
                 if isinstance(decision, ApprovedOrder):
                     approved = decision.intent
+                    # Plan 21: fleet-wide cap runs AFTER the per-bot gate
+                    # approves. If denied, record the decision + skip the
+                    # broker call so the order never reaches the wire.
+                    if self._allocator is not None:
+                        fleet_decision = await self._allocator.approve_intent(
+                            self._bot_name or "",  # validated in __init__
+                            approved,
+                            self._fleet_positions_fn() if self._fleet_positions_fn else {},
+                        )
+                        if not isinstance(fleet_decision, ApprovedOrder):
+                            await self._journal.record_risk_decision(
+                                intent=fleet_decision.intent, approved=False,
+                                rule=fleet_decision.rule,
+                                reason=fleet_decision.reason,
+                                timestamp=fleet_decision.timestamp,
+                            )
+                            continue
                     # Place at broker. SimExecutionClient registers + returns
                     # a PENDING event; we then materialize a FILLED at bar.close.
                     event = await self._broker.place_order(approved)
@@ -132,6 +164,11 @@ class LiveTradingLoop:
                         fill_price=bar.close,
                         ts=bar.timestamp,
                     )
+                    # Plan 21: settle the allocator pending slot now that the
+                    # fill is reflected in the tracker. Next allocator call
+                    # will see the settled position via fleet_positions_fn.
+                    if self._allocator is not None and self._bot_name is not None:
+                        self._allocator.settle_intent(self._bot_name, approved)
                     await self._journal.record_risk_decision(
                         intent=approved, approved=True,
                         rule=None, reason=None,

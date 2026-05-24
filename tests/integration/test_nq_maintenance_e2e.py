@@ -19,8 +19,8 @@ overnight) through the fleet runtime and asserts:
     propbot e2e tests use).
 
 Same patterns as `test_gold_bot_e2e.py` and `test_propbot_e2e.py`:
-  - Bare symbol root (MNQ, not MNQH26) at BotSpec level — the
-    AccountStateTracker contract-suffix issue is Plan 21 territory.
+  - Contract-suffixed symbol (MNQH26) at BotSpec level — Plan 21 made
+    AccountStateTracker's point-value lookup contract-suffix-aware.
   - SimExecutionClient + StaticSource, not TopstepXSimClient scenarios.
 """
 from __future__ import annotations
@@ -45,15 +45,15 @@ from bot.types import AccountState, Bar
 
 
 def _spec(tmp_path: Path) -> BotSpec:
-    """NQ Maintenance spec with bare MNQ root + slightly relaxed params so
-    the 24h fixture is long enough to fire at least once."""
+    """NQ Maintenance spec with contract-suffixed MNQH26 + slightly relaxed
+    params so the 24h fixture is long enough to fire at least once."""
     return BotSpec(
         name="nq_maintenance_e2e",
         enabled=True,
-        symbol="MNQ",
+        symbol="MNQH26",
         strategy_id="mean_reversion_bb",
         strategy_params={
-            "symbol": "MNQ",
+            "symbol": "MNQH26",
             # Looser than shipped so a single 24h fixture exercises an entry —
             # the shipped 50/3.0/20-80 tuning rarely fires by design.
             "bb_period": 20,
@@ -103,7 +103,7 @@ def _build_24h_bars() -> list[Bar]:
     for i, c in enumerate(closes):
         ts = start_utc + timedelta(minutes=i)
         bars.append(Bar(
-            symbol="MNQ", open=c, high=c + 0.25, low=c - 0.25, close=c,
+            symbol="MNQH26", open=c, high=c + 0.25, low=c - 0.25, close=c,
             volume=10, timestamp=ts, interval="1m",
         ))
     return bars

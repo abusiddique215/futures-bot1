@@ -75,6 +75,17 @@ class SignalStrategy:
 
     # ---- Lifecycle ---------------------------------------------------------
 
+    def setup(self) -> None:
+        """FleetRuntime hook (Plan 21) — spawn the background pump task.
+
+        Idempotent + safe to call without a source (no-op if source is None,
+        used by tests that drive `inject()` directly). Production callers go
+        through FleetRuntime, which calls this before LiveTradingLoop.run().
+        """
+        if self._source is None:
+            return
+        self.start()
+
     def start(self) -> asyncio.Task[None]:
         """Spawn the background pump task. Idempotent: returns existing task
         if already started. Raises RuntimeError if no source was provided.
