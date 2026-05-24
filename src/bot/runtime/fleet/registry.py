@@ -30,6 +30,8 @@ from bot.risk.policies import DrawdownPolicy
 from bot.runtime.fleet.schedule import AlwaysOn, CustomWindows, MarketHours, Schedule
 from bot.runtime.fleet.spec import BotSpec
 from bot.strategy.orb import OpeningRangeBreakoutStrategy, ORBProfile
+from bot.strategy.profiles.propbot import PROPBOT_DEFAULTS
+from bot.strategy.trend_following import TrendFollowingStrategy
 
 _CT: Final[ZoneInfo] = ZoneInfo("America/Chicago")
 
@@ -71,6 +73,16 @@ def _build_orb(params: dict[str, Any]) -> Strategy:
     return OpeningRangeBreakoutStrategy(ORBProfile.model_validate(params))
 
 
+def _build_trend_ema_pullback(params: dict[str, Any]) -> Strategy:
+    """Apply PROPBOT defaults, then YAML overrides. session_end_ct accepts
+    either a `datetime.time` (Python dict) or an ISO string (YAML round-trip)."""
+    merged: dict[str, Any] = {**PROPBOT_DEFAULTS, **params}
+    raw_cutoff = merged.get("session_end_ct")
+    if raw_cutoff is not None:
+        merged["session_end_ct"] = _parse_time(raw_cutoff)
+    return TrendFollowingStrategy(**merged)
+
+
 def _build_market_hours(params: dict[str, Any]) -> Schedule:
     open_ct = _parse_time(params.get("open_ct", time(8, 30)))
     close_ct = _parse_time(params.get("close_ct", time(15, 10)))
@@ -102,6 +114,7 @@ class BotRegistry:
 
     def _register_builtins(self) -> None:
         self.register_strategy("orb_5m", _build_orb)
+        self.register_strategy("trend_ema_pullback", _build_trend_ema_pullback)
         self.register_risk_policy(
             "combine_intraday",
             lambda p: CombineIntradayDrawdown(**p),
