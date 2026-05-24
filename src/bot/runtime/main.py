@@ -53,6 +53,7 @@ EXIT_OK: Final[int] = 0
 EXIT_SECRETS_MISSING: Final[int] = 3
 EXIT_HOST_DENIED: Final[int] = 4
 EXIT_RECONCILE_FAIL: Final[int] = 5
+EXIT_NO_BOTS: Final[int] = 6  # Plan 12 — `--bots <dir>` with zero enabled bots
 
 
 class _Bus(Protocol):
@@ -462,3 +463,119 @@ async def main(
             await journal.close()
         except Exception as e:
             log.warning("journal.close raised during cleanup: %s", e)
+
+
+# ---- Plan 12: multi-bot fleet entry point -----------------------------------
+
+async def run_fleet(
+    *,
+    bots_dir: Path,
+    check_only: bool = False,
+    connect_broker_fn: Callable[[BotConfig, SecretsDict], Awaitable[Any]] | None = None,
+    bar_source_factory: Callable[[Any], Any] | None = None,
+    bus: _Bus | None = None,
+) -> int:
+    """Load N BotSpecs, resolve them, run them concurrently under one broker.
+
+    Single shared broker per fleet (v1 — see plan §scope). One Journal file
+    per bot at `spec.journal_path`. Fleet runs until every bot completes
+    (or fails); failures are logged per-bot but do NOT crash the fleet.
+
+    Returns EXIT_OK on success, EXIT_NO_BOTS if zero enabled bots.
+    """
+    from bot.observability.bus import NoopTelemetryBus
+    from bot.runtime.bar_source import SimBarSource
+    from bot.runtime.fleet.registry import BotRegistry
+    from bot.runtime.fleet.runtime import FleetRuntime
+    from bot.runtime.fleet.spec import load_bot_specs
+
+    _bus: _Bus = bus or _NullBus()
+
+    specs = load_bot_specs(bots_dir)
+    enabled = [s for s in specs if s.enabled]
+    if not enabled:
+        msg = f"no enabled bots found under {bots_dir}"
+        log.critical(msg)
+        _bus.alert("FLEET_NO_BOTS", severity="CRITICAL", reason=msg)
+        return EXIT_NO_BOTS
+
+    # We need a broker to wire into every gate. In `--check` mode we still
+    # want one (so the registry can be exercised end-to-end), but we don't
+    # require real secrets — default to a sim broker for `--check`.
+    if connect_broker_fn is None:
+        from bot.backtest.sim_client import SimExecutionClient
+        broker: Any = SimExecutionClient()
+        await broker.connect()
+    else:
+        # Use first enabled spec to satisfy connect_broker's BotConfig signature.
+        # NB: this is a transitional shim — Plan 12 punts on per-bot account
+        # binding (a Plan 21 feature). The fleet uses a single shared broker.
+        # We construct a minimal placeholder BotConfig so the existing
+        # connect_broker dispatch table can be reused without rewrite.
+        broker = await connect_broker_fn(_placeholder_cfg(enabled[0]), SecretsDict())
+
+    registry = BotRegistry()
+    resolved = [registry.build(s, broker=broker) for s in enabled]
+
+    if check_only:
+        log.info("fleet --check: %d enabled bots resolved cleanly", len(resolved))
+        for r in resolved:
+            log.info("  %s: strategy=%s policy=%s schedule=%s",
+                     r.name, type(r.strategy).__name__,
+                     type(r.risk_gate.policy).__name__,
+                     type(r.schedule).__name__)
+        try:
+            await broker.disconnect()
+        except Exception as e:
+            log.warning("broker.disconnect raised during fleet --check cleanup: %s", e)
+        return EXIT_OK
+
+    factory = bar_source_factory or (lambda spec: SimBarSource([]))
+    fleet = FleetRuntime(
+        bots=resolved,
+        broker=broker,
+        bar_source_factory=factory,
+        telemetry=NoopTelemetryBus(),
+        heartbeat_path=Path("state/heartbeat"),
+    )
+    try:
+        results = await fleet.run()
+        for name, result in results.items():
+            if result.error is None:
+                log.info("bot=%s bars=%d OK", name, result.bars_processed)
+            else:
+                log.error("bot=%s bars=%d FAIL: %s", name, result.bars_processed, result.error)
+        return EXIT_OK
+    finally:
+        try:
+            await broker.disconnect()
+        except Exception as e:
+            log.warning("broker.disconnect raised during fleet cleanup: %s", e)
+
+
+def _placeholder_cfg(spec: Any) -> BotConfig:
+    """Minimal BotConfig so connect_broker dispatch can resolve. The fleet
+    doesn't use most of these fields — only `broker` is read.
+    """
+    from datetime import time as _time
+
+    from bot.config import DataConfig
+    _ = spec
+    return BotConfig(
+        env="dev",
+        broker="sim",
+        account_id="fleet",
+        strategy="orb",
+        strategy_profile=Path("config/profiles/surge.yml"),
+        risk_policy="combine_50k",
+        data=DataConfig(
+            historical_root=Path("data/parquet"),
+            historical_vendor="firstratedata",
+            live_source="ib",
+        ),
+        news_calendar=Path("config/news_calendar.yml"),
+        flat_by_warning_ct=_time(14, 0),
+        flat_by_force_ct=_time(15, 10),
+    )
+
+

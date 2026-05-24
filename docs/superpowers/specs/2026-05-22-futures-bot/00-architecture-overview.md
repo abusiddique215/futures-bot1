@@ -40,7 +40,7 @@ Every assumption a sibling spec is permitted to rely on. If you change one of th
 | D14 | **Hosting: User's physical Mac** (no cloud VM for live) | **Topstep ToS bans VPS/VPN for Funded accounts.** Docker is fine *on the Mac* as dev convenience. Cloud is fine for backtest-research-only workloads. |
 | D15 | **Deployment: Docker on the Mac**, auto-start on login, structured logs to local disk | Matches D14. Mac becomes the production environment for live Topstep accounts. |
 | D16 | **Observability: JSON-lines structured logs + SQLite trade journal + Telegram alerts** | Cheap, debuggable, no external dashboard service. Telegram for fill/error/rule-violation events; logs for forensics. |
-| D17 | **Strategy interface: Nautilus `Strategy` subclass**, no separate base class abstraction in v1 | YAGNI per CLAUDE.md §2. If a non-Nautilus strategy provider materializes (e.g., grammatical-evolution generator), add the abstraction *then*. |
+| D17 | **Strategy interface: `bot.backtest.strategy.Strategy` Protocol (`on_bar(bar, state) -> Iterable[OrderIntent]`)**, satisfied independently by each registered strategy. The multi-bot runtime (Plan 12) instantiates one Strategy per bot via `BotRegistry`, so the abstraction is now load-bearing. | Plan 12 superseded the Plan 0 YAGNI call: with N bots running concurrently in one process, the Strategy port is the seam that lets ORB, Maróy, Williams, etc. coexist behind a single risk gate + execution client. |
 
 ## 3. Reality check (acknowledged, not hidden)
 
